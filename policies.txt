@@ -1,0 +1,130 @@
+-- ==========================================================
+-- 1. HABILITAR ROW LEVEL SECURITY (RLS)
+-- ==========================================================
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+
+-- ==========================================================
+-- 2. FUNÇÕES AUXILIARES
+-- ==========================================================
+CREATE OR REPLACE FUNCTION public.is_super_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN COALESCE(
+    (NULLIF(current_setting('request.jwt.claims', true), '')::jsonb -> 'app_metadata' ->> 'is_super_admin')::boolean,
+    false
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN false;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION public.get_tenant_id()
+RETURNS UUID AS $$
+BEGIN
+  RETURN NULLIF(
+    current_setting('request.jwt.claims', true)::jsonb -> 'app_metadata' ->> 'tenant_id',
+    ''
+  )::uuid;
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN null;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- ==========================================================
+-- 3. UNIQUE INDEXES & PERFORMANCE INDEXES
+-- ==========================================================
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_tenant_barcode 
+ON products (tenant_id, barcode);
+
+CREATE INDEX IF NOT EXISTS idx_products_tenant_id ON products (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenants_owner_id ON tenants (owner_id);
+
+-- ==========================================================
+-- 4. POLÍTICAS DE SELECT (Leitura)
+-- ==========================================================
+DROP POLICY IF EXISTS "tenant_select_products" ON products;
+CREATE POLICY "tenant_select_products"
+ON products FOR SELECT TO authenticated
+USING (tenant_id = public.get_tenant_id() OR public.is_super_admin());
+
+DROP POLICY IF EXISTS "tenant_select_tenants" ON tenants;
+CREATE POLICY "tenant_select_tenants"
+ON tenants FOR SELECT TO authenticated
+USING (id = public.get_tenant_id() OR owner_id = auth.uid() OR public.is_super_admin());
+
+DROP POLICY IF EXISTS "tenant_select_users" ON users;
+CREATE POLICY "tenant_select_users"
+ON users FOR SELECT TO authenticated
+USING (
+  tenant_id = public.get_tenant_id() 
+  OR id = auth.uid() 
+  OR public.is_super_admin()
+);
+
+-- ==========================================================
+-- 5. POLÍTICAS DE INSERT (Criação)
+-- ==========================================================
+DROP POLICY IF EXISTS "tenant_insert_tenants" ON tenants;
+CREATE POLICY "tenant_insert_tenants"
+ON tenants FOR INSERT TO authenticated
+WITH CHECK (owner_id = auth.uid() OR public.is_super_admin());
+
+DROP POLICY IF EXISTS "tenant_insert_products" ON products;
+CREATE POLICY "tenant_insert_products"
+ON products FOR INSERT TO authenticated
+WITH CHECK (tenant_id = public.get_tenant_id() OR public.is_super_admin());
+
+DROP POLICY IF EXISTS "tenant_insert_users" ON users;
+CREATE POLICY "tenant_insert_users"
+ON users FOR INSERT TO authenticated
+WITH CHECK (
+  id = auth.uid() 
+  OR tenant_id = public.get_tenant_id() 
+  OR public.is_super_admin()
+);
+
+-- ==========================================================
+-- 6. POLÍTICAS DE UPDATE (Atualização)
+-- ==========================================================
+DROP POLICY IF EXISTS "tenant_update_products" ON products;
+CREATE POLICY "tenant_update_products"
+ON products FOR UPDATE TO authenticated
+USING (tenant_id = public.get_tenant_id() OR public.is_super_admin())
+WITH CHECK (tenant_id = public.get_tenant_id() OR public.is_super_admin());
+
+DROP POLICY IF EXISTS "tenant_update_tenants" ON tenants;
+CREATE POLICY "tenant_update_tenants"
+ON tenants FOR UPDATE TO authenticated
+USING (id = public.get_tenant_id() OR owner_id = auth.uid() OR public.is_super_admin())
+WITH CHECK (id = public.get_tenant_id() OR owner_id = auth.uid() OR public.is_super_admin());
+
+-- Usuário só altera seu próprio perfil (evita que funcionário altere perfil de outro)
+DROP POLICY IF EXISTS "tenant_update_users" ON users;
+CREATE POLICY "tenant_update_users"
+ON users FOR UPDATE TO authenticated
+USING (id = auth.uid() OR public.is_super_admin())
+WITH CHECK (id = auth.uid() OR public.is_super_admin());
+
+-- ==========================================================
+-- 7. POLÍTICAS DE DELETE (Exclusão)
+-- ==========================================================
+DROP POLICY IF EXISTS "tenant_delete_tenants" ON tenants;
+CREATE POLICY "tenant_delete_tenants"
+ON tenants FOR DELETE TO authenticated
+USING (public.is_super_admin());
+
+DROP POLICY IF EXISTS "tenant_delete_products" ON products;
+CREATE POLICY "tenant_delete_products"
+ON products FOR DELETE TO authenticated
+USING (tenant_id = public.get_tenant_id() OR public.is_super_admin());
+
+-- Apenas o próprio usuário ou o Super Admin pode deletar a conta
+DROP POLICY IF EXISTS "tenant_delete_users" ON users;
+CREATE POLICY "tenant_delete_users"
+ON users FOR DELETE TO authenticated
+USING (id = auth.uid() OR public.is_super_admin());

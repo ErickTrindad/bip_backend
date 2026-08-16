@@ -1,8 +1,90 @@
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 generator client {
   provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  USER
+}
+
+enum TenantCategory {
+  PADARIA
+  MERCEARIA
+  BAR
+  LANCHONETE
+  FARMACIA
+  CONVENIENCIA
+  PET_SHOP
+  MERCADO
+  OUTROS
+}
+
+enum EmployeeRange {
+  SOLO_1       @map("solo_1")
+  TEAM_2_5     @map("team_2_5")
+  TEAM_6_10    @map("team_6_10")
+  TEAM_11_PLUS @map("team_11_plus")
+}
+
+model Tenant {
+  id            String         @id @default(uuid()) @db.Uuid
+  name          String
+  category      TenantCategory @default(OUTROS)
+  employeeRange EmployeeRange  @default(SOLO_1) @map("employee_range")
+  email         String?
+  phone         String?
+  ownerId       String         @map("owner_id") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  owner    User      @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  users    User[]    @relation("TenantUsers")
+  products Product[]
+
+  @@index([ownerId], map: "idx_tenants_owner_id")
+  @@map("tenants")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String
+  role         Role     @default(USER)
+  tenantId     String?  @map("tenant_id") @db.Uuid
+  isSuperAdmin Boolean  @default(false) @map("is_super_admin")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant?  @relation("TenantUsers", fields: [tenantId], references: [id], onDelete: SetNull)
+  ownedTenants Tenant[] @relation("TenantOwner")
+
+  @@index([tenantId], map: "idx_users_tenant_id")
+  @@map("users")
+}
+
+model Product {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  barcode       String   @map("barcode")
+  name          String
+  category      String?
+  depotQty      Int      @default(0) @map("depot_qty")
+  depotLocation String?  @map("depot_location")
+  shelfQty      Int      @default(0) @map("shelf_qty")
+  shelfLocation String?  @map("shelf_location")
+  shelfMinQty   Int      @default(0) @map("shelf_min_qty")
+  price         Decimal? @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, barcode], map: "idx_products_tenant_barcode")
+  @@index([tenantId], map: "idx_products_tenant_id")
+  @@map("products")
 }
