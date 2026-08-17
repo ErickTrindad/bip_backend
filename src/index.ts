@@ -39,6 +39,8 @@ app.setSerializerCompiler(serializerCompiler);
 // CORS
 await app.register(cors, {
   origin: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ['Authorization', 'Content-Type', 'Accept']
 });
 
 // Swagger / OpenAPI Documentação
