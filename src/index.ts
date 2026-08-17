@@ -1,3 +1,19 @@
+import dns from "node:dns";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+// Ignorar validação de certificados TLS/SSL (evita erros em proxy/firewall corporativo)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+// Configura ordem de resolução DNS para IPv4 e adiciona servidores públicos como fallback
+try {
+  dns.setDefaultResultOrder("ipv4first");
+  dns.setServers(["8.8.8.8", "1.1.1.1", "8.8.4.4"]);
+} catch (error) {
+  console.warn("Aviso ao configurar servidores DNS personalizados:", error);
+}
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
@@ -8,11 +24,9 @@ import {
   validatorCompiler,
   ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import dotenv from "dotenv";
 import { authRoutes } from "./routes/auth.routes.js";
 import { tenantRoutes } from "./routes/tenant.routes.js";
-
-dotenv.config();
+import { productRoutes } from "./routes/product.routes.js";
 
 const app = Fastify({
   logger: true,
@@ -82,7 +96,7 @@ app.get(
 // Registrar rotas da aplicação
 await app.register(authRoutes);
 await app.register(tenantRoutes);
-
+await app.register(productRoutes);
 const port = Number(process.env.PORT) || 3333;
 
 try {
