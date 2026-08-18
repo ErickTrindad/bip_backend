@@ -410,6 +410,11 @@ export class ProductService {
         if (!user.isSuperAdmin && product.tenantId !== user.tenantId) {
             throw new AppError('Acesso não autorizado para excluir este produto', 403);
         }
+        // Não deve ser possível excluir se houver saldo em estoque (depósito ou gôndola)
+        const totalStock = (product.depotQty || 0) + (product.shelfQty || 0);
+        if (totalStock > 0) {
+            throw new AppError(`Não é possível excluir este produto pois ainda há estoque (Depósito: ${product.depotQty}, Gôndola: ${product.shelfQty}). Favor zerar a quantidade antes de excluir.`, 400);
+        }
         await prisma.product.delete({
             where: { id },
         });

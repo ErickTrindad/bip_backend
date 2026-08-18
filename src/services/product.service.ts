@@ -151,7 +151,7 @@ export class ProductService {
       const data = response.data;
       if (data && data.status === 1 && data.product) {
         const p = data.product;
-        const name = p.product_name_pt || p.product_name || p.generic_name_pt || p.generic_name || 'Produto sem nome';
+        const name = p.product_name || p.product_name_pt || p.generic_name_pt || p.generic_name || 'Produto sem nome';
         const category = p.categories_tags?.[0]?.replace(/^[^:]+:/, '') || p.categories || null;
         const brands = p.brands || null;
         const imageUrl = p.image_front_url || p.image_url || null;
@@ -566,6 +566,15 @@ export class ProductService {
 
     if (!user.isSuperAdmin && product.tenantId !== user.tenantId) {
       throw new AppError('Acesso não autorizado para excluir este produto', 403);
+    }
+
+    // Não deve ser possível excluir se houver saldo em estoque (depósito ou gôndola)
+    const totalStock = (product.depotQty || 0) + (product.shelfQty || 0);
+    if (totalStock > 0) {
+      throw new AppError(
+        `Não é possível excluir este produto pois ainda há estoque (Depósito: ${product.depotQty}, Gôndola: ${product.shelfQty}). Favor zerar a quantidade antes de excluir.`,
+        400
+      );
     }
 
     await prisma.product.delete({
