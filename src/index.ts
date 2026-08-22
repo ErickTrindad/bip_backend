@@ -27,6 +27,7 @@ import {
 import { authRoutes } from "./routes/auth.routes.js";
 import { tenantRoutes } from "./routes/tenant.routes.js";
 import { productRoutes } from "./routes/product.routes.js";
+import { prisma } from "./lib/prisma.js";
 
 const app = Fastify({
   logger: true,
@@ -40,7 +41,7 @@ app.setSerializerCompiler(serializerCompiler);
 await app.register(cors, {
   origin: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ['Authorization', 'Content-Type', 'Accept']
+  allowedHeaders: ["Authorization", "Content-Type", "Accept"],
 });
 
 // Swagger / OpenAPI Documentação
@@ -91,7 +92,12 @@ app.get(
     },
   },
   async (_request, _reply) => {
-    return { message: "pong", timestamp: new Date().toISOString() };
+    const result = await prisma.$queryRaw`Select 1 As up`;
+
+    return {
+      message: "pong",
+      timestamp: new Date().toISOString(),
+    };
   },
 );
 
