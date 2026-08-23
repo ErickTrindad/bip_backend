@@ -642,9 +642,8 @@ Remove um produto do catálogo da empresa.
 Integração de altíssima velocidade (< 500ms) com a **Groq Cloud** utilizando:
 - **Whisper Large v3**: Transcrição de áudio em português com alta precisão e cancelamento de ruído de fundo (freezers, caixas, movimentação de loja).
 - **Llama 3.3 / Llama 3.1**: Inferência semântica com fallback dinâmico e estruturação de comandos operacionais em JSON.
-- **Matching Semântico Inteligente**: Localiza produtos cadastrados mesmo se o operador falar nomes com variações (ex: *"Guaraná Zero 2L"* localiza *"Refrigerante Guaraná Antarctica Zero 2 Litros"*).
-- **Suporte a Atualização de Preço e Dados**: Intenção `UPDATE_PRODUCT` para reajustes de preço, localizações e estoque mínimo por voz.
-- **Compatibilidade OpenAI**: URL base (`GROQ_BASE_URL`) pode ser migrada sem alterar regras de negócio.
+- **Matching Semântico Multi-Produto**: Localiza múltiplos produtos independentes na mesma frase falada pelo operador (ex: *"Adiciona 50 un de Guaraná Zero e cadastra o Guaraná 2L com 15 no depósito e 5 na gôndola"*).
+- **Ações Compostas e Multi-Itens**: Executa ações individuais para cada produto em sequência (adição de estoque, cadastro com distribuição gôndola/depósito, alteração de preço ou transferências).
 
 ---
 

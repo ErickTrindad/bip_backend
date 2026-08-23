@@ -27,7 +27,7 @@ export const groqVoiceCommandBodySchema = z.object({
         .boolean()
         .optional()
         .default(false)
-        .describe('Executar as ações no banco automaticamente se identificadas (suporta ações compostas: atualizar preço + transferir estoque)'),
+        .describe('Executar as ações no banco automaticamente se identificadas (suporta múltiplos produtos e ações compostas)'),
 });
 export const groqTranscribeResponseSchema = z.object({
     text: z.string(),
@@ -47,6 +47,37 @@ export const groqPromptResponseSchema = z.object({
     })
         .optional(),
 });
+export const actionItemResponseSchema = z.object({
+    action: z.enum([
+        'UPDATE_PRODUCT',
+        'STOCK_ENTRY',
+        'TRANSFER_STOCK',
+        'POS_SALE',
+        'CHECK_STOCK',
+        'REGISTER_PRODUCT',
+    ]),
+    productQuery: z.string().nullable().optional(),
+    matchedProduct: z
+        .object({
+        id: z.string(),
+        name: z.string(),
+        barcode: z.string(),
+        price: z.number().nullable().optional(),
+        depotQty: z.number(),
+        shelfQty: z.number(),
+    })
+        .nullable()
+        .optional(),
+    price: z.number().nullable().optional(),
+    quantity: z.number().nullable().optional(),
+    depotQty: z.number().nullable().optional(),
+    shelfQty: z.number().nullable().optional(),
+    from: z.enum(['depot', 'shelf']).nullable().optional(),
+    to: z.enum(['depot', 'shelf']).nullable().optional(),
+    destination: z.enum(['depot', 'shelf']).nullable().optional(),
+    executed: z.boolean().optional(),
+    result: z.unknown().optional(),
+});
 export const groqVoiceCommandResponseSchema = z.object({
     transcription: z.string(),
     intent: z.enum([
@@ -60,36 +91,16 @@ export const groqVoiceCommandResponseSchema = z.object({
         'UNKNOWN',
     ]),
     extractedData: z.record(z.string(), z.unknown()),
-    actions: z
+    actions: z.array(actionItemResponseSchema),
+    matchedProducts: z
         .array(z.object({
-        action: z.enum([
-            'UPDATE_PRODUCT',
-            'STOCK_ENTRY',
-            'TRANSFER_STOCK',
-            'POS_SALE',
-            'CHECK_STOCK',
-            'REGISTER_PRODUCT',
-        ]),
-        productQuery: z.string().nullable().optional(),
-        price: z.number().nullable().optional(),
-        quantity: z.number().nullable().optional(),
-        from: z.enum(['depot', 'shelf']).nullable().optional(),
-        to: z.enum(['depot', 'shelf']).nullable().optional(),
-        destination: z.enum(['depot', 'shelf']).nullable().optional(),
-        executed: z.boolean().optional(),
-        result: z.unknown().optional(),
-    }))
-        .optional(),
-    matchedProduct: z
-        .object({
         id: z.string(),
         name: z.string(),
         barcode: z.string(),
         price: z.number().nullable().optional(),
         depotQty: z.number(),
         shelfQty: z.number(),
-    })
-        .nullable()
+    }))
         .optional(),
     explanation: z.string(),
     executed: z.boolean(),

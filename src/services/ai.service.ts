@@ -49,11 +49,22 @@ interface GroqModelsResponse {
   }>;
 }
 
+interface MatchedProductSummary {
+  id: string;
+  name: string;
+  barcode: string;
+  price: number | null;
+  depotQty: number;
+  shelfQty: number;
+}
+
 interface ActionItem {
   action: 'UPDATE_PRODUCT' | 'STOCK_ENTRY' | 'TRANSFER_STOCK' | 'POS_SALE' | 'CHECK_STOCK' | 'REGISTER_PRODUCT';
   productQuery?: string;
   price?: number;
   quantity?: number;
+  depotQty?: number;
+  shelfQty?: number;
   from?: 'depot' | 'shelf';
   to?: 'depot' | 'shelf';
   destination?: 'depot' | 'shelf';
@@ -62,6 +73,7 @@ interface ActionItem {
   shelfMinQty?: number;
   barcode?: string;
   paymentMethod?: 'MONEY' | 'CREDIT_CARD' | 'DEBIT_CARD' | 'PIX';
+  matchedProduct?: MatchedProductSummary | null;
   executed?: boolean;
   result?: unknown;
 }
@@ -116,6 +128,14 @@ const STOPWORDS: Record<string, true> = {
   tambem: true,
   também: true,
   unidade: true,
+  produto: true,
+  produtos: true,
+  adiciona: true,
+  cadastra: true,
+  ele: true,
+  tem: true,
+  no: true,
+  na: true,
 };
 
 export class GroqService {
@@ -219,7 +239,7 @@ export class GroqService {
     const language = options.language || 'pt';
     const prompt =
       options.prompt ||
-      'Vocabulário de varejo brasileiro: gôndola, depósito, reposição, compra, entrada de mercadoria, estoque, preço, reajuste, transferência, caixa, EAN, fardo, pacote, unidade, Pepsi Twist, Guaraná Zero, Coca-Cola, refrigerante, cerveja, leite, arroz, feijão.';
+      'Vocabulário de varejo brasileiro: gôndola, depósito, reposição, compra, entrada de mercadoria, estoque, preço, reajuste, transferência, caixa, EAN, fardo, pacote, unidade, Guaraná Antarctica Zero, Guaraná Antarctica 2 litros, Pepsi Twist, Coca-Cola, refrigerante, cerveja, leite, arroz, feijão.';
 
     const ext = filename.split('.').pop()?.toLowerCase();
     const mimeType =
@@ -387,7 +407,7 @@ export class GroqService {
   }
 
   /**
-   * Busca produto com tolerância semântica a variações de nome falado (Fuzzy / Token matching).
+   * Busca produto no catálogo com tolerância a variações semânticas e termos falados.
    */
   private async findProductByQuery(query: string, tenantId: string) {
     const cleanQuery = query.trim().toLowerCase();
@@ -405,7 +425,7 @@ export class GroqService {
 
     if (exactMatch) return exactMatch;
 
-    // 2. Busca por substring (contains)
+    // 2. Busca por substring
     const containsMatch = await prisma.product.findFirst({
       where: {
         tenantId,
@@ -415,7 +435,7 @@ export class GroqService {
 
     if (containsMatch) return containsMatch;
 
-    // 3. Busca por tokens/palavras-chave (ignora preposições e pronomes)
+    // 3. Busca por tokens chave
     const tokens = cleanQuery
       .split(/\s+/)
       .map((t) => t.replace(/[^a-z0-9]/gi, ''))
@@ -460,7 +480,7 @@ export class GroqService {
   }
 
   /**
-   * Processa comando de voz de chão de loja com suporte a ações compostas / multi-comandos.
+   * Processa comando de voz de chão de loja com suporte completo a múltiplos produtos e multi-ações.
    */
   async processVoiceCommand(
     audioBuffer: Buffer,
@@ -479,59 +499,66 @@ export class GroqService {
         transcription: '',
         intent: 'UNKNOWN' as const,
         extractedData: {},
+        actions: [],
+        matchedProducts: [],
         explanation: 'Nenhuma fala ou áudio inteligível foi detectado.',
         executed: false,
       };
     }
 
-    // 2. Extração semântica com suporte a comandos compostos (Ex: Mudar preço E transferir)
+    // 2. Extração semântica com suporte explícito a múltiplos produtos
     const systemPrompt =
       options?.systemPrompt ||
-      `Você é o assistente de inteligência artificial do sistema de varejo e estoque GO PME.
-Sua missão é analisar a fala do operador e extrair as intenções e ações operacionais a serem executadas no sistema.
-ATENÇÃO: O usuário pode solicitar UMA OU MÚLTIPLAS AÇÕES na mesma frase (ex: "Quero mudar o preço da Pepsi Twist para 12 reais e também transferir 12 unidades da gôndola para o depósito").
+      `Você é o assistente de inteligência artificial de estoque do GO PME.
+Sua missão é identificar com precisão TODAS as ações e TODOS os produtos mencionados na frase do operador.
 
-Ações suportadas:
-1. "UPDATE_PRODUCT": Alterar preço de venda, localização ou estoque mínimo de produto. (Ex: "preço seja R$ 12,00", "muda o preço para 8.50", "coloca no corredor 2").
-2. "TRANSFER_STOCK": Movimentação entre depósito e gôndola (tanto Depósito -> Gôndola quanto Gôndola -> Depósito).
-3. "STOCK_ENTRY": Entrada de novas mercadorias / compra de fornecedor (soma ao estoque).
-4. "POS_SALE": Venda rápida no caixa / PDV.
-5. "CHECK_STOCK": Consulta de estoque / preço.
-6. "REGISTER_PRODUCT": Cadastro formal de produto.
+MUITO IMPORTANTE: A frase pode conter 1, 2 ou mais produtos diferentes com ações diferentes.
+Exemplo: "Adiciona 50 unidades do produto Guaraná Antarctica Zero e cadastra o produto Guaraná Antarctica 2 litros. Ele tem 15 unidades no depósito e 5 na gôndola."
+-> Neste exemplo, temos 2 produtos e 2 ações distintas:
+   1) Ação "STOCK_ENTRY": productQuery="Guaraná Antarctica Zero", quantity=50, destination="depot" (ou entrada)
+   2) Ação "REGISTER_PRODUCT": productQuery="Guaraná Antarctica 2 litros", depotQty=15, shelfQty=5
 
-Regras de classificação:
-- Se houver apenas 1 ação, defina "intent" com o nome da ação.
-- Se houver 2 ou mais ações (ex: atualizar preço E transferir estoque), defina "intent": "COMPOUND_ACTION" e liste cada ação detalhada dentro da lista "actions".
-- IMPORTANTE: Sempre preencha o campo "price" com o valor numérico mencionado (ex: se o usuário disser "preço seja R$ 12,00", preencha "price": 12.00 e "newPrice": 12.00).
+Ações suportadas por item:
+- "STOCK_ENTRY": Entrada/adição/compra de mercadorias no estoque. (Ex: "Adiciona 50 unidades de...", "Comprei 10 fardos de...").
+- "REGISTER_PRODUCT": Cadastro de novo produto. (Ex: "cadastra o produto...", "novo produto com X no depósito e Y na gôndola").
+- "UPDATE_PRODUCT": Atualização de preço, localização ou estoque mínimo. (Ex: "muda o preço para 12.00").
+- "TRANSFER_STOCK": Transferência interna (Depósito <-> Gôndola).
+- "POS_SALE": Venda no caixa / PDV.
+- "CHECK_STOCK": Consulta de saldo / preço.
+
+Regras:
+1. Sempre gere a lista "actions" com uma entrada individual para CADA produto/ação mencionado.
+2. Se houver mais de 1 ação na lista, defina "intent": "COMPOUND_ACTION". Se houver apenas 1, defina "intent" com o nome da respectiva ação.
+3. Preencha os campos numéricos (quantity, price, depotQty, shelfQty) de cada ação individualmente.
 
 Você DEVE responder ESTRITAMENTE em formato JSON:
 {
   "intent": "UPDATE_PRODUCT" | "TRANSFER_STOCK" | "STOCK_ENTRY" | "POS_SALE" | "CHECK_STOCK" | "REGISTER_PRODUCT" | "COMPOUND_ACTION" | "UNKNOWN",
   "extractedData": {
-    "productQuery": string ou null (nome do produto ou código de barras mencionado),
-    "price": number ou null (preço informado em valor numérico, ex: 12.00),
-    "newPrice": number ou null (novo preço quando for atualização, ex: 12.00),
-    "quantity": number ou null (quantidade mencionada),
-    "from": "depot" | "shelf" ou null (origem da transferência),
-    "to": "depot" | "shelf" ou null (destino da transferência),
-    "destination": "depot" | "shelf" ou null,
-    "depotLocation": string ou null,
-    "shelfLocation": string ou null,
-    "shelfMinQty": number ou null,
-    "barcode": string ou null
+    "productQuery": string ou null (primeiro produto mencionado ou resumo),
+    "price": number ou null,
+    "newPrice": number ou null,
+    "quantity": number ou null,
+    "depotQty": number ou null,
+    "shelfQty": number ou null,
+    "from": "depot" | "shelf" ou null,
+    "to": "depot" | "shelf" ou null,
+    "destination": "depot" | "shelf" ou null
   },
   "actions": [
     {
       "action": "UPDATE_PRODUCT" | "TRANSFER_STOCK" | "STOCK_ENTRY" | "POS_SALE" | "CHECK_STOCK" | "REGISTER_PRODUCT",
-      "productQuery": string ou null,
+      "productQuery": string (nome exato deste produto),
       "price": number ou null,
       "quantity": number ou null,
+      "depotQty": number ou null (quantidade no depósito quando for cadastro),
+      "shelfQty": number ou null (quantidade na gôndola quando for cadastro),
       "from": "depot" | "shelf" ou null,
       "to": "depot" | "shelf" ou null,
       "destination": "depot" | "shelf" ou null
     }
   ],
-  "explanation": "Resumo amigável em português explicando todas as ações que serão realizadas"
+  "explanation": "Resumo amigável em português explicando todas as ações que serão realizadas para cada produto"
 }`;
 
     const chatResult = await this.chatPrompt({
@@ -554,18 +581,13 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
     const extractedData = parsed.extractedData || {};
     const explanation = parsed.explanation || 'Comando interpretado com sucesso.';
 
-    // Normaliza os campos price e newPrice caso o LLM tenha preenchido apenas um deles
+    // Normaliza os campos price e newPrice
     const resolvedPrice =
       extractedData.price !== undefined && extractedData.price !== null
         ? Number(extractedData.price)
         : extractedData.newPrice !== undefined && extractedData.newPrice !== null
         ? Number(extractedData.newPrice)
         : undefined;
-
-    if (resolvedPrice !== undefined) {
-      extractedData.price = resolvedPrice;
-      extractedData.newPrice = resolvedPrice;
-    }
 
     // Normaliza a lista de ações a executar
     const rawActions = parsed.actions && parsed.actions.length > 0 ? parsed.actions : [];
@@ -579,6 +601,14 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
                 : act.action === 'UPDATE_PRODUCT'
                 ? resolvedPrice
                 : undefined,
+            depotQty:
+              act.depotQty !== undefined && act.depotQty !== null
+                ? Number(act.depotQty)
+                : undefined,
+            shelfQty:
+              act.shelfQty !== undefined && act.shelfQty !== null
+                ? Number(act.shelfQty)
+                : undefined,
           }))
         : intent !== 'UNKNOWN' && intent !== 'COMPOUND_ACTION'
         ? [
@@ -587,6 +617,8 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
               productQuery: extractedData.productQuery,
               price: resolvedPrice,
               quantity: extractedData.quantity,
+              depotQty: extractedData.depotLocation ? Number(extractedData.quantity) : undefined,
+              shelfQty: extractedData.shelfLocation ? Number(extractedData.quantity) : undefined,
               from: extractedData.from,
               to: extractedData.to,
               destination: extractedData.destination,
@@ -599,45 +631,119 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
           ]
         : [];
 
-    let matchedProduct: {
-      id: string;
-      name: string;
-      barcode: string;
-      price: unknown;
-      depotQty: number;
-      shelfQty: number;
-    } | null = null;
+    const matchedProductsMap = new Map<string, MatchedProductSummary>();
+    const executedResults: unknown[] = [];
 
-    // Busca produto principal
-    const mainQuery = extractedData.productQuery || actionList[0]?.productQuery;
-    if (user.tenantId && mainQuery) {
-      const found = await this.findProductByQuery(mainQuery, user.tenantId);
-      if (found) {
-        matchedProduct = {
-          id: found.id,
-          name: found.name,
-          barcode: found.barcode,
-          price: found.price,
-          depotQty: found.depotQty,
-          shelfQty: found.shelfQty,
-        };
+    // Localiza os produtos de cada ação
+    if (user.tenantId) {
+      for (const item of actionList) {
+        if (item.productQuery) {
+          const found = await this.findProductByQuery(item.productQuery, user.tenantId);
+          if (found) {
+            const summary: MatchedProductSummary = {
+              id: found.id,
+              name: found.name,
+              barcode: found.barcode,
+              price: found.price ? Number(found.price) : null,
+              depotQty: found.depotQty,
+              shelfQty: found.shelfQty,
+            };
+            item.matchedProduct = summary;
+            matchedProductsMap.set(found.id, summary);
+          }
+        }
       }
     }
 
-    const executedResults: unknown[] = [];
-    let allExecuted = false;
-
-    // Execução automática de cada ação
+    // Execução automática para cada produto e ação
     if (options?.autoExecute && user.tenantId && actionList.length > 0) {
       for (const item of actionList) {
-        const productQuery = item.productQuery || mainQuery;
-        const targetProduct = productQuery
-          ? await this.findProductByQuery(productQuery, user.tenantId)
-          : matchedProduct ? await prisma.product.findUnique({ where: { id: matchedProduct.id } }) : null;
+        const targetProduct = item.matchedProduct
+          ? await prisma.product.findUnique({ where: { id: item.matchedProduct.id } })
+          : item.productQuery
+          ? await this.findProductByQuery(item.productQuery, user.tenantId)
+          : null;
 
-        const effectivePrice = item.price ?? resolvedPrice;
+        if (item.action === 'STOCK_ENTRY' && item.quantity) {
+          const qty = Number(item.quantity);
+          const destination = item.destination || 'depot';
 
-        if (item.action === 'UPDATE_PRODUCT' && targetProduct) {
+          if (targetProduct) {
+            const updated = await prisma.product.update({
+              where: { id: targetProduct.id },
+              data: {
+                depotQty: destination === 'depot' ? targetProduct.depotQty + qty : targetProduct.depotQty,
+                shelfQty: destination === 'shelf' ? targetProduct.shelfQty + qty : targetProduct.shelfQty,
+              },
+            });
+            item.executed = true;
+            item.result = {
+              message: `Estoque de ${targetProduct.name} atualizado: +${qty} un no ${destination === 'depot' ? 'Depósito' : 'Gôndola'}. Novo saldo: ${destination === 'depot' ? updated.depotQty : updated.shelfQty} un.`,
+              product: updated,
+            };
+            executedResults.push(item.result);
+          } else if (item.productQuery) {
+            const generatedBarcode = item.barcode || `AUTO-${Date.now().toString().slice(-8)}`;
+            const newProduct = await productService.create(
+              {
+                name: item.productQuery,
+                barcode: generatedBarcode,
+                depotQty: destination === 'depot' ? qty : 0,
+                shelfQty: destination === 'shelf' ? qty : 0,
+                shelfMinQty: 5,
+                price: item.price ? Number(item.price) : undefined,
+              },
+              user
+            );
+            item.executed = true;
+            item.result = {
+              message: `Novo produto cadastrado: ${newProduct.product.name} com ${qty} un no ${destination === 'depot' ? 'Depósito' : 'Gôndola'}.`,
+              product: newProduct.product,
+            };
+            executedResults.push(item.result);
+          }
+        } else if (item.action === 'REGISTER_PRODUCT' && item.productQuery) {
+          const generatedBarcode = item.barcode || `AUTO-${Date.now().toString().slice(-8)}`;
+          const initialDepot = item.depotQty !== undefined ? Number(item.depotQty) : item.quantity ? Number(item.quantity) : 0;
+          const initialShelf = item.shelfQty !== undefined ? Number(item.shelfQty) : 0;
+
+          if (targetProduct) {
+            // Se já existir, atualiza as quantidades informadas
+            const updated = await prisma.product.update({
+              where: { id: targetProduct.id },
+              data: {
+                depotQty: initialDepot > 0 ? targetProduct.depotQty + initialDepot : targetProduct.depotQty,
+                shelfQty: initialShelf > 0 ? targetProduct.shelfQty + initialShelf : targetProduct.shelfQty,
+                price: item.price ? Number(item.price) : targetProduct.price,
+              },
+            });
+            item.executed = true;
+            item.result = {
+              message: `Produto existente ${targetProduct.name} atualizado com as quantidades informadas.`,
+              product: updated,
+            };
+            executedResults.push(item.result);
+          } else {
+            const newProduct = await productService.create(
+              {
+                name: item.productQuery,
+                barcode: generatedBarcode,
+                depotQty: initialDepot,
+                shelfQty: initialShelf,
+                shelfMinQty: 5,
+                price: item.price ? Number(item.price) : undefined,
+              },
+              user
+            );
+            item.executed = true;
+            item.result = {
+              message: `Produto ${newProduct.product.name} cadastrado com sucesso (${initialDepot} un no depósito e ${initialShelf} un na gôndola).`,
+              product: newProduct.product,
+            };
+            executedResults.push(item.result);
+          }
+        } else if (item.action === 'UPDATE_PRODUCT' && targetProduct) {
+          const effectivePrice = item.price ?? resolvedPrice;
           const updatePayload: {
             price?: number;
             depotLocation?: string;
@@ -661,7 +767,7 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
           const updated = await productService.update(targetProduct.id, updatePayload, user);
           item.executed = true;
           item.result = {
-            message: `Preço/dados de ${targetProduct.name} atualizados com sucesso (Novo preço: R$ ${effectivePrice ? Number(effectivePrice).toFixed(2) : updated.product.price}).`,
+            message: `Produto ${targetProduct.name} atualizado com sucesso.`,
             product: updated.product,
           };
           executedResults.push(item.result);
@@ -696,48 +802,12 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
             product: updatedProd,
           };
           executedResults.push(item.result);
-        } else if (item.action === 'STOCK_ENTRY' && item.quantity) {
-          const qty = Number(item.quantity);
-          const destination = item.destination || 'depot';
-
-          if (targetProduct) {
-            const updated = await prisma.product.update({
-              where: { id: targetProduct.id },
-              data: {
-                depotQty: destination === 'depot' ? targetProduct.depotQty + qty : targetProduct.depotQty,
-                shelfQty: destination === 'shelf' ? targetProduct.shelfQty + qty : targetProduct.shelfQty,
-              },
-            });
-            item.executed = true;
-            item.result = {
-              message: `Entrada de estoque: +${qty} un adicionadas ao ${destination === 'depot' ? 'Depósito' : 'Gôndola'} de ${targetProduct.name}.`,
-              product: updated,
-            };
-            executedResults.push(item.result);
-          } else if (productQuery) {
-            const generatedBarcode = item.barcode || `AUTO-${Date.now().toString().slice(-8)}`;
-            const newProduct = await productService.create(
-              {
-                name: productQuery,
-                barcode: generatedBarcode,
-                depotQty: destination === 'depot' ? qty : 0,
-                shelfQty: destination === 'shelf' ? qty : 0,
-                shelfMinQty: 5,
-                price: effectivePrice ? Number(effectivePrice) : undefined,
-              },
-              user
-            );
-            item.executed = true;
-            item.result = {
-              message: `Novo produto cadastrado: ${newProduct.product.name} com ${qty} un no ${destination === 'depot' ? 'Depósito' : 'Gôndola'}.`,
-              product: newProduct.product,
-            };
-            executedResults.push(item.result);
-          }
+        } else if (item.action === 'CHECK_STOCK' && targetProduct) {
+          item.executed = true;
+          item.result = { product: targetProduct };
+          executedResults.push(item.result);
         }
       }
-
-      allExecuted = executedResults.length > 0;
     }
 
     return {
@@ -745,18 +815,9 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
       intent,
       extractedData,
       actions: actionList,
-      matchedProduct: matchedProduct
-        ? {
-            id: matchedProduct.id,
-            name: matchedProduct.name,
-            barcode: matchedProduct.barcode,
-            price: matchedProduct.price ? Number(matchedProduct.price) : null,
-            depotQty: matchedProduct.depotQty,
-            shelfQty: matchedProduct.shelfQty,
-          }
-        : null,
+      matchedProducts: Array.from(matchedProductsMap.values()),
       explanation,
-      executed: allExecuted,
+      executed: executedResults.length > 0,
       executionResult:
         executedResults.length === 1
           ? executedResults[0]
