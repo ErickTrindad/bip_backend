@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { productController } from '../controllers/product.controller.js';
 import { authMiddleware } from '../middlewares/auth.js';
-import { createProductSchema, updateProductSchema, productParamsSchema, productBarcodeParamsSchema, productListQuerySchema, transferStockSchema, posSaleSchema, openFoodFactsResponseSchema, singleProductResponseSchema, listProductsResponseSchema, listCriticalProductsResponseSchema, posSaleResponseSchema, } from '../schemas/product.schema.js';
+import { createProductSchema, updateProductSchema, productParamsSchema, productBarcodeParamsSchema, productListQuerySchema, productDeltaSyncQuerySchema, transferStockSchema, posSaleSchema, openFoodFactsResponseSchema, singleProductResponseSchema, listProductsResponseSchema, listCriticalProductsResponseSchema, posSaleResponseSchema, productDeltaSyncResponseSchema, } from '../schemas/product.schema.js';
 export const productRoutes = async (app) => {
     const typedApp = app.withTypeProvider();
     // 1. Consulta Externa Open Food Facts (Pode ser acessada com autenticação)
@@ -197,4 +197,22 @@ export const productRoutes = async (app) => {
             },
         },
     }, productController.delete.bind(productController));
+    // 11. Sincronização Delta por Timestamp (IndexedDB / PDV Offline)
+    typedApp.get('/products/sync/delta', {
+        preHandler: [authMiddleware],
+        schema: {
+            tags: ['Produtos', 'Sincronização'],
+            summary: 'Delta Sync de Produtos por Timestamp (IndexedDB / PDV Offline)',
+            description: 'Retorna produtos criados, alterados (upserted) ou excluídos logicamente (soft delete) desde o timestamp `since` fornecido pelo cliente. Garante que PDV e catálogo nunca travem em modo offline.',
+            security: [{ bearerAuth: [] }],
+            querystring: productDeltaSyncQuerySchema,
+            response: {
+                200: productDeltaSyncResponseSchema,
+                400: z.object({ error: z.string(), details: z.any().optional() }),
+                401: z.object({ error: z.string() }),
+                403: z.object({ error: z.string() }),
+                500: z.object({ error: z.string() }),
+            },
+        },
+    }, productController.getDeltaSync.bind(productController));
 };

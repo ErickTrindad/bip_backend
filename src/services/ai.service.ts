@@ -3,7 +3,7 @@ import { AppError } from '../errors/app-error.js';
 import { AuthUser } from '../middlewares/auth.js';
 import { productService } from './product.service.js';
 import { prisma } from '../lib/prisma.js';
-
+import type { VoiceIntent } from '../schemas/ai.schema.js';
 interface TranscribeOptions {
   audioBuffer: Buffer;
   filename?: string;
@@ -78,8 +78,10 @@ interface ActionItem {
   result?: unknown;
 }
 
+export type { VoiceIntent };
+
 interface ParsedVoiceCommand {
-  intent?: 'UPDATE_PRODUCT' | 'STOCK_ENTRY' | 'TRANSFER_STOCK' | 'POS_SALE' | 'CHECK_STOCK' | 'REGISTER_PRODUCT' | 'COMPOUND_ACTION' | 'UNKNOWN';
+  intent?: VoiceIntent;
   extractedData?: {
     productQuery?: string;
     quantity?: number;
@@ -416,6 +418,7 @@ export class GroqService {
     const exactMatch = await prisma.product.findFirst({
       where: {
         tenantId,
+        deletedAt: null,
         OR: [
           { barcode: query },
           { name: { equals: query, mode: 'insensitive' } },
@@ -429,11 +432,10 @@ export class GroqService {
     const containsMatch = await prisma.product.findFirst({
       where: {
         tenantId,
+        deletedAt: null,
         name: { contains: query, mode: 'insensitive' },
       },
     });
-
-    if (containsMatch) return containsMatch;
 
     // 3. Busca por tokens chave
     const tokens = cleanQuery
@@ -445,6 +447,7 @@ export class GroqService {
       const products = await prisma.product.findMany({
         where: {
           tenantId,
+          deletedAt: null,
           OR: tokens.map((token) => ({
             name: { contains: token, mode: 'insensitive' },
           })),
@@ -519,21 +522,23 @@ Exemplo: "Adiciona 50 unidades do produto Guaraná Antarctica Zero e cadastra o 
    2) Ação "REGISTER_PRODUCT": productQuery="Guaraná Antarctica 2 litros", depotQty=15, shelfQty=5
 
 Ações suportadas por item:
+- "REPLENISH_ALL_CRITICAL": Varredura geral do depósito para reposição em lote de gôndolas críticas. (Ex: "faça uma varredura no depósito", "reponha todas as gôndolas críticas", "transfere tudo que tá faltando na gôndola", "repor produtos críticos").
 - "STOCK_ENTRY": Entrada/adição/compra de mercadorias no estoque. (Ex: "Adiciona 50 unidades de...", "Comprei 10 fardos de...").
 - "REGISTER_PRODUCT": Cadastro de novo produto. (Ex: "cadastra o produto...", "novo produto com X no depósito e Y na gôndola").
 - "UPDATE_PRODUCT": Atualização de preço, localização ou estoque mínimo. (Ex: "muda o preço para 12.00").
-- "TRANSFER_STOCK": Transferência interna (Depósito <-> Gôndola).
+- "TRANSFER_STOCK": Transferência interna específica de produto (Depósito <-> Gôndola).
 - "POS_SALE": Venda no caixa / PDV.
 - "CHECK_STOCK": Consulta de saldo / preço.
 
 Regras:
-1. Sempre gere a lista "actions" com uma entrada individual para CADA produto/ação mencionado.
-2. Se houver mais de 1 ação na lista, defina "intent": "COMPOUND_ACTION". Se houver apenas 1, defina "intent" com o nome da respectiva ação.
-3. Preencha os campos numéricos (quantity, price, depotQty, shelfQty) de cada ação individualmente.
+1. Se o comando for uma varredura geral ou reposição em lote de todos os produtos críticos (sem especificar um único produto), defina "intent": "REPLENISH_ALL_CRITICAL", actions: [] e explanation amigável.
+2. Sempre gere a lista "actions" com uma entrada individual para CADA produto/ação mencionado.
+3. Se houver mais de 1 ação na lista, defina "intent": "COMPOUND_ACTION". Se houver apenas 1, defina "intent" com o nome da respectiva ação.
+4. Preencha os campos numéricos (quantity, price, depotQty, shelfQty) de cada ação individualmente.
 
 Você DEVE responder ESTRITAMENTE em formato JSON:
 {
-  "intent": "UPDATE_PRODUCT" | "TRANSFER_STOCK" | "STOCK_ENTRY" | "POS_SALE" | "CHECK_STOCK" | "REGISTER_PRODUCT" | "COMPOUND_ACTION" | "UNKNOWN",
+  "intent": "UPDATE_PRODUCT" | "TRANSFER_STOCK" | "REPLENISH_ALL_CRITICAL" | "STOCK_ENTRY" | "POS_SALE" | "CHECK_STOCK" | "REGISTER_PRODUCT" | "COMPOUND_ACTION" | "UNKNOWN",
   "extractedData": {
     "productQuery": string ou null (primeiro produto mencionado ou resumo),
     "price": number ou null,
@@ -569,18 +574,9 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
     });
 
     const parsed = (chatResult.parsedJson as ParsedVoiceCommand) || {};
-    const intent = (parsed.intent || 'UNKNOWN') as
-      | 'STOCK_ENTRY'
-      | 'UPDATE_PRODUCT'
-      | 'TRANSFER_STOCK'
-      | 'POS_SALE'
-      | 'CHECK_STOCK'
-      | 'REGISTER_PRODUCT'
-      | 'COMPOUND_ACTION'
-      | 'UNKNOWN';
+    const intent = (parsed.intent || 'UNKNOWN') as VoiceIntent;
     const extractedData = parsed.extractedData || {};
-    const explanation = parsed.explanation || 'Comando interpretado com sucesso.';
-
+    let explanation = parsed.explanation || 'Comando interpretado com sucesso.';
     // Normaliza os campos price e newPrice
     const resolvedPrice =
       extractedData.price !== undefined && extractedData.price !== null
@@ -610,7 +606,7 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
                 ? Number(act.shelfQty)
                 : undefined,
           }))
-        : intent !== 'UNKNOWN' && intent !== 'COMPOUND_ACTION'
+        : intent !== 'UNKNOWN' && intent !== 'COMPOUND_ACTION' && intent !== 'REPLENISH_ALL_CRITICAL'
         ? [
             {
               action: intent,
@@ -633,6 +629,59 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
 
     const matchedProductsMap = new Map<string, MatchedProductSummary>();
     const executedResults: unknown[] = [];
+
+    // Interceptador para varredura e reposição em lote de gôndolas críticas
+    if (intent === 'REPLENISH_ALL_CRITICAL' && user.tenantId) {
+      const activeProductsInDepot = await prisma.product.findMany({
+        where: {
+          tenantId: user.tenantId,
+          deletedAt: null,
+          depotQty: { gt: 0 },
+        },
+        orderBy: { name: 'asc' },
+      });
+
+      const criticalProducts = activeProductsInDepot.filter(
+        (prod) => prod.shelfQty <= prod.shelfMinQty
+      );
+
+      actionList.length = 0; // Limpa lista prévia
+
+      if (criticalProducts.length === 0) {
+        explanation =
+          'Varredura concluída: Nenhuma gôndola crítica necessita de reposição ou o depósito não possui estoque disponível no momento.';
+      } else {
+        explanation = `Varredura concluída: Identificamos ${criticalProducts.length} produto(s) com gôndola crítica prontos para reposição.`;
+
+        for (const prod of criticalProducts) {
+          const transferQty = Math.min(
+            Math.max(1, prod.shelfMinQty - prod.shelfQty),
+            prod.depotQty
+          );
+
+          const summary: MatchedProductSummary = {
+            id: prod.id,
+            name: prod.name,
+            barcode: prod.barcode,
+            price: prod.price ? Number(prod.price) : null,
+            depotQty: prod.depotQty,
+            shelfQty: prod.shelfQty,
+          };
+
+          actionList.push({
+            action: 'TRANSFER_STOCK',
+            productQuery: prod.name,
+            quantity: transferQty,
+            from: 'depot',
+            to: 'shelf',
+            destination: 'shelf',
+            matchedProduct: summary,
+          });
+
+          matchedProductsMap.set(prod.id, summary);
+        }
+      }
+    }
 
     // Localiza os produtos de cada ação
     if (user.tenantId) {
@@ -659,7 +708,7 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
     if (options?.autoExecute && user.tenantId && actionList.length > 0) {
       for (const item of actionList) {
         const targetProduct = item.matchedProduct
-          ? await prisma.product.findUnique({ where: { id: item.matchedProduct.id } })
+          ? await prisma.product.findFirst({ where: { id: item.matchedProduct.id, deletedAt: null } })
           : item.productQuery
           ? await this.findProductByQuery(item.productQuery, user.tenantId)
           : null;

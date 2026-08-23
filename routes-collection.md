@@ -54,7 +54,8 @@ Valores aceitos para o campo `employeeRange` / `tenantEmployeeRange`:
 | `GET` | `/products/:id` | Autenticado | Detalhes completos de um produto por UUID |
 | `POST` | `/products` | Autenticado | Cadastro de produto com trava Freemium (100 SKUs) |
 | `PUT` | `/products/:id` | Autenticado | Atualização de dados e estoques do produto |
-| `DELETE` | `/products/:id` | Autenticado | Exclusão de produto do catálogo |
+| `DELETE` | `/products/:id` | Autenticado | Exclusão lógica (soft delete) de produto do catálogo |
+| `GET` | `/products/sync/delta` | Autenticado | Delta Sync por Timestamp para IndexedDB / PDV Offline |
 ---
 
 ## 1. 🏥 Health Check
@@ -623,8 +624,8 @@ Atualiza informações cadastrais, localizações ou quantidades de estoque.
 
 ---
 
-### `DELETE /products/:id` (Exclusão de Produto)
-Remove um produto do catálogo da empresa.
+### `DELETE /products/:id` (Exclusão Lógica de Produto / Soft Delete)
+Realiza a exclusão lógica (*soft delete*) de um produto do catálogo da empresa, preenchendo a coluna `deleted_at` com o timestamp atual. Isto garante integridade relacional, preserva auditoria e permite que o PDV offline receba a exclusão no próximo Delta Sync.
 
 - **Headers**:
   ```http
@@ -633,18 +634,99 @@ Remove um produto do catálogo da empresa.
 - **Resposta Sucesso (`200 OK`)**:
 ```json
 {
-  "message": "Produto excluído com sucesso"
+  "message": "Produto excluído com sucesso (soft delete)",
+  "product": {
+    "id": "8f3b145d-7a1b-4f9e-bc43-228741369def",
+    "tenantId": "c1f7a4b8-2a1d-4f1e-9a1b-123456789abc",
+    "barcode": "7891000100103",
+    "name": "Leite Condensado Moça Lata 395g",
+    "category": "Laticínios",
+    "depotQty": 0,
+    "depotLocation": null,
+    "shelfQty": 0,
+    "shelfLocation": null,
+    "shelfMinQty": 12,
+    "price": 8.90,
+    "createdAt": "2026-08-17T12:00:00.000Z",
+    "updatedAt": "2026-08-23T12:00:00.000Z",
+    "deletedAt": "2026-08-23T12:00:00.000Z"
+  }
 }
 ```
 
 ---
 
+### `GET /products/sync/delta` (Delta Sync por Timestamp / IndexedDB Offline)
+Endpoint essencial para a sincronização bidirecional e offline-first do PDV e Catálogo Web/Mobile. O cliente local armazena os produtos no **IndexedDB** e passa o parâmetro `since` (timestamp ISO da última sincronização). O servidor retorna apenas os registros alterados (upserted) ou excluídos (deleted) a partir desse timestamp.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Query Parameters**:
+  - `since` *(string ISO-8601, obrigatório)*: Ex: `2026-08-23T00:00:00.000Z`
+  - `limit` *(number, opcional, padrão 500, máx 1000)*: Limite de registros por lote
+  - `tenantId` *(UUID, opcional, Super Admin apenas)*: Filtrar por tenant
+- **Resposta Sucesso (`200 OK`)**:
+```json
+{
+  "syncedAt": "2026-08-23T12:30:00.000Z",
+  "serverTimestamp": 1787488200000,
+  "totalChanged": 3,
+  "hasMore": false,
+  "upserted": [
+    {
+      "id": "8f3b145d-7a1b-4f9e-bc43-228741369def",
+      "tenantId": "c1f7a4b8-2a1d-4f1e-9a1b-123456789abc",
+      "barcode": "7891000100103",
+      "name": "Leite Condensado Moça Lata 395g",
+      "category": "Laticínios",
+      "depotQty": 48,
+      "depotLocation": "Depósito - Corredor B",
+      "shelfQty": 15,
+      "shelfLocation": "Gôndola 4",
+      "shelfMinQty": 12,
+      "price": 8.90,
+      "createdAt": "2026-08-17T12:00:00.000Z",
+      "updatedAt": "2026-08-23T12:15:00.000Z",
+      "deletedAt": null
+    }
+  ],
+  "deletedIds": [
+    "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+  ],
+  "deleted": [
+    {
+      "id": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
+      "tenantId": "c1f7a4b8-2a1d-4f1e-9a1b-123456789abc",
+      "barcode": "7891000200204",
+      "name": "Biscoito Recheado Chocolate 140g",
+      "category": "Biscoitos",
+      "depotQty": 0,
+      "depotLocation": null,
+      "shelfQty": 0,
+      "shelfLocation": null,
+      "shelfMinQty": 10,
+      "price": 4.50,
+      "createdAt": "2026-08-15T10:00:00.000Z",
+      "updatedAt": "2026-08-23T11:00:00.000Z",
+      "deletedAt": "2026-08-23T11:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## 5. 🤖 Inteligência Artificial no Chão de Loja (`/ai`)
+---
+
 Integração de altíssima velocidade (< 500ms) com a **Groq Cloud** utilizando:
 - **Whisper Large v3**: Transcrição de áudio em português com alta precisão e cancelamento de ruído de fundo (freezers, caixas, movimentação de loja).
 - **Llama 3.3 / Llama 3.1**: Inferência semântica com fallback dinâmico e estruturação de comandos operacionais em JSON.
+- **Varredura e Reposição Geral de Gôndolas Críticas (`REPLENISH_ALL_CRITICAL`)**: Identifica comandos de varredura global (ex: *"faça uma varredura no depósito e reponha tudo que está faltando"*), consulta automaticamente todos os produtos em estado crítico com saldo em depósito e gera o plano de reposição em lote.
 - **Matching Semântico Multi-Produto**: Localiza múltiplos produtos independentes na mesma frase falada pelo operador (ex: *"Adiciona 50 un de Guaraná Zero e cadastra o Guaraná 2L com 15 no depósito e 5 na gôndola"*).
 - **Ações Compostas e Multi-Itens**: Executa ações individuais para cada produto em sequência (adição de estoque, cadastro com distribuição gôndola/depósito, alteração de preço ou transferências).
-
 ---
 
 ### `POST /ai/transcribe` (Transcrição via Base64)

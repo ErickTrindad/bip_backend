@@ -47,15 +47,27 @@ export const groqPromptResponseSchema = z.object({
     })
         .optional(),
 });
+export const voiceIntentEnum = z.enum([
+    'UPDATE_PRODUCT',
+    'STOCK_ENTRY',
+    'TRANSFER_STOCK',
+    'REPLENISH_ALL_CRITICAL',
+    'POS_SALE',
+    'CHECK_STOCK',
+    'REGISTER_PRODUCT',
+    'COMPOUND_ACTION',
+    'UNKNOWN',
+]);
+export const actionTypeEnum = z.enum([
+    'UPDATE_PRODUCT',
+    'STOCK_ENTRY',
+    'TRANSFER_STOCK',
+    'POS_SALE',
+    'CHECK_STOCK',
+    'REGISTER_PRODUCT',
+]);
 export const actionItemResponseSchema = z.object({
-    action: z.enum([
-        'UPDATE_PRODUCT',
-        'STOCK_ENTRY',
-        'TRANSFER_STOCK',
-        'POS_SALE',
-        'CHECK_STOCK',
-        'REGISTER_PRODUCT',
-    ]),
+    action: actionTypeEnum,
     productQuery: z.string().nullable().optional(),
     matchedProduct: z
         .object({
@@ -80,16 +92,7 @@ export const actionItemResponseSchema = z.object({
 });
 export const groqVoiceCommandResponseSchema = z.object({
     transcription: z.string(),
-    intent: z.enum([
-        'UPDATE_PRODUCT',
-        'STOCK_ENTRY',
-        'TRANSFER_STOCK',
-        'POS_SALE',
-        'CHECK_STOCK',
-        'REGISTER_PRODUCT',
-        'COMPOUND_ACTION',
-        'UNKNOWN',
-    ]),
+    intent: voiceIntentEnum,
     extractedData: z.record(z.string(), z.unknown()),
     actions: z.array(actionItemResponseSchema),
     matchedProducts: z

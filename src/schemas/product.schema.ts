@@ -14,6 +14,7 @@ export const productItemSchema = z.object({
   price: z.number().nullable().describe('Preço de venda unitário'),
   createdAt: z.date().describe('Data de criação'),
   updatedAt: z.date().describe('Data de última atualização'),
+  deletedAt: z.date().nullable().optional().describe('Data de exclusão lógica (soft delete) para delta sync'),
 });
 
 export const criticalProductItemSchema = productItemSchema.extend({
@@ -62,6 +63,12 @@ export const productListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(50).optional().describe('Limite de registros retornados'),
   offset: z.coerce.number().int().min(0).default(0).optional().describe('Offset de paginação'),
 });
+export const productDeltaSyncQuerySchema = z.object({
+  since: z.string().datetime({ offset: true }).or(z.string().datetime()).describe('Timestamp ISO 8601 da última sincronização do cliente (IndexedDB)'),
+  tenantId: z.string().uuid('ID de tenant inválido').optional().describe('Filtrar por tenant específico (Super Admin apenas)'),
+  limit: z.coerce.number().int().positive().max(1000).default(500).optional().describe('Limite de registros por lote de sincronização'),
+});
+
 
 export const transferStockSchema = z.object({
   quantity: z.number().int().positive('Quantidade de transferência deve ser um número inteiro positivo maior que zero').describe('Quantidade a transferir do depósito para a gôndola'),
@@ -124,4 +131,14 @@ export const posSaleResponseSchema = z.object({
     soldQty: z.number().int(),
     remainingShelfQty: z.number().int(),
   })).describe('Produtos com baixa efetuada na gôndola'),
+});
+
+export const productDeltaSyncResponseSchema = z.object({
+  syncedAt: z.string().describe('Timestamp ISO do servidor no momento do sync'),
+  serverTimestamp: z.number().describe('Epoch timestamp em milissegundos para referência do cliente'),
+  totalChanged: z.number().int().describe('Total de registros criados, alterados ou deletados'),
+  hasMore: z.boolean().describe('Indica se há mais registros a sincronizar neste lote'),
+  upserted: z.array(productItemSchema).describe('Produtos criados ou atualizados desde o timestamp'),
+  deletedIds: z.array(z.string().uuid()).describe('IDs de produtos que foram excluídos desde o timestamp'),
+  deleted: z.array(productItemSchema).describe('Registros completos de produtos excluídos (soft deleted) desde o timestamp'),
 });

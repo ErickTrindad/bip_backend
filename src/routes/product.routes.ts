@@ -9,6 +9,7 @@ import {
   productParamsSchema,
   productBarcodeParamsSchema,
   productListQuerySchema,
+  productDeltaSyncQuerySchema,
   transferStockSchema,
   posSaleSchema,
   openFoodFactsResponseSchema,
@@ -16,6 +17,7 @@ import {
   listProductsResponseSchema,
   listCriticalProductsResponseSchema,
   posSaleResponseSchema,
+  productDeltaSyncResponseSchema,
 } from '../schemas/product.schema.js';
 
 export const productRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -271,5 +273,29 @@ export const productRoutes: FastifyPluginAsync = async (app: FastifyInstance) =>
       },
     },
     productController.delete.bind(productController)
+  );
+
+  // 11. Sincronização Delta por Timestamp (IndexedDB / PDV Offline)
+  typedApp.get(
+    '/products/sync/delta',
+    {
+      preHandler: [authMiddleware],
+      schema: {
+        tags: ['Produtos', 'Sincronização'],
+        summary: 'Delta Sync de Produtos por Timestamp (IndexedDB / PDV Offline)',
+        description:
+          'Retorna produtos criados, alterados (upserted) ou excluídos logicamente (soft delete) desde o timestamp `since` fornecido pelo cliente. Garante que PDV e catálogo nunca travem em modo offline.',
+        security: [{ bearerAuth: [] }],
+        querystring: productDeltaSyncQuerySchema,
+        response: {
+          200: productDeltaSyncResponseSchema,
+          400: z.object({ error: z.string(), details: z.any().optional() }),
+          401: z.object({ error: z.string() }),
+          403: z.object({ error: z.string() }),
+          500: z.object({ error: z.string() }),
+        },
+      },
+    },
+    productController.getDeltaSync.bind(productController)
   );
 };

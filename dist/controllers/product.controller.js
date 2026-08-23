@@ -1,6 +1,6 @@
 import { productService } from '../services/product.service.js';
 import { AppError } from '../errors/app-error.js';
-import { createProductSchema, updateProductSchema, productParamsSchema, productBarcodeParamsSchema, productListQuerySchema, transferStockSchema, posSaleSchema, } from '../schemas/product.schema.js';
+import { createProductSchema, updateProductSchema, productParamsSchema, productBarcodeParamsSchema, productListQuerySchema, productDeltaSyncQuerySchema, transferStockSchema, posSaleSchema, } from '../schemas/product.schema.js';
 export class ProductController {
     async getAll(request, reply) {
         const user = request.user;
@@ -208,6 +208,30 @@ export class ProductController {
                 return reply.status(error.statusCode).send({ error: error.message });
             }
             return reply.status(500).send({ error: 'Erro ao excluir produto' });
+        }
+    }
+    async getDeltaSync(request, reply) {
+        const user = request.user;
+        const parseQuery = productDeltaSyncQuerySchema.safeParse(request.query);
+        if (!parseQuery.success) {
+            return reply.status(400).send({
+                error: 'Parâmetros de sincronização delta inválidos',
+                details: parseQuery.error.format(),
+            });
+        }
+        try {
+            const result = await productService.getDeltaSync(user, {
+                since: new Date(parseQuery.data.since),
+                tenantId: parseQuery.data.tenantId,
+                limit: parseQuery.data.limit,
+            });
+            return reply.status(200).send(result);
+        }
+        catch (error) {
+            if (error instanceof AppError) {
+                return reply.status(error.statusCode).send({ error: error.message });
+            }
+            return reply.status(500).send({ error: 'Erro ao processar sincronização delta' });
         }
     }
 }

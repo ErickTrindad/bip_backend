@@ -35,6 +35,13 @@ export interface ListProductsFilter {
   category?: string;
   limit?: number;
   offset?: number;
+  includeDeleted?: boolean;
+}
+
+export interface ProductDeltaSyncFilter {
+  since: Date;
+  tenantId?: string;
+  limit?: number;
 }
 
 export interface PosSaleItemInput {
@@ -72,6 +79,7 @@ interface FormattedProduct {
   price: number | null;
   createdAt: Date;
   updatedAt: Date;
+  deletedAt?: Date | null;
 }
 
 interface OpenFoodFactsApiResponse {
@@ -105,6 +113,7 @@ function formatProductResponse(product: Product): FormattedProduct {
     price: product.price ? Number(product.price) : null,
     createdAt: product.createdAt,
     updatedAt: product.updatedAt,
+    deletedAt: product.deletedAt ?? null,
   };
 }
 
@@ -195,7 +204,9 @@ export class ProductService {
    * Conforme policies.txt (tenant_select_products: tenant_id = public.get_tenant_id() OR public.is_super_admin()).
    */
   async getAll(user: AuthUser, filters: ListProductsFilter = {}) {
-    const where: Prisma.ProductWhereInput = {};
+    const where: Prisma.ProductWhereInput = {
+      deletedAt: filters.includeDeleted ? undefined : null,
+    };
 
     if (user.isSuperAdmin) {
       if (filters.tenantId) {
@@ -249,7 +260,9 @@ export class ProductService {
       throw new AppError('Usuário não vinculado a um tenant', 403);
     }
 
-    const where: Prisma.ProductWhereInput = {};
+    const where: Prisma.ProductWhereInput = {
+      deletedAt: null,
+    };
     if (targetTenantId) {
       where.tenantId = targetTenantId;
     }
@@ -295,8 +308,11 @@ export class ProductService {
    * Conforme policies.txt (tenant_select_products).
    */
   async getById(id: string, user: AuthUser) {
-    const product = await prisma.product.findUnique({
-      where: { id },
+    const product = await prisma.product.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+      },
     });
 
     if (!product) {
@@ -317,12 +333,11 @@ export class ProductService {
   async getByBarcode(barcode: string, user: AuthUser, explicitTenantId?: string) {
     const tenantId = this.resolveTenantId(user, explicitTenantId);
 
-    const product = await prisma.product.findUnique({
+    const product = await prisma.product.findFirst({
       where: {
-        tenantId_barcode: {
-          tenantId,
-          barcode,
-        },
+        tenantId,
+        barcode,
+        deletedAt: null,
       },
     });
 
@@ -341,22 +356,23 @@ export class ProductService {
     const tenantId = this.resolveTenantId(user, data.tenantId);
 
     // Validação de unicidade (tenant_id + barcode)
-    const existing = await prisma.product.findUnique({
+    const existing = await prisma.product.findFirst({
       where: {
-        tenantId_barcode: {
-          tenantId,
-          barcode: data.barcode,
-        },
+        tenantId,
+        barcode: data.barcode,
       },
     });
 
-    if (existing) {
+    if (existing && !existing.deletedAt) {
       throw new AppError(`Já existe um produto com o código de barras "${data.barcode}" nesta empresa`, 409);
     }
 
     // Trava de Limites do Plano Free (100 SKUs) - Fase 5 do GO PME
     const currentCount = await prisma.product.count({
-      where: { tenantId },
+      where: {
+        tenantId,
+        deletedAt: null,
+      },
     });
 
     if (!user.isSuperAdmin && currentCount >= FREE_TIER_MAX_PRODUCTS) {
@@ -364,6 +380,24 @@ export class ProductService {
         `Limite do Plano Free atingido (${FREE_TIER_MAX_PRODUCTS} produtos cadastrados). Faça upgrade para continuar cadastrando novos itens.`,
         403
       );
+    }
+
+    if (existing && existing.deletedAt) {
+      const reactivated = await prisma.product.update({
+        where: { id: existing.id },
+        data: {
+          name: data.name,
+          category: data.category || null,
+          depotQty: data.depotQty ?? 0,
+          depotLocation: data.depotLocation || null,
+          shelfQty: data.shelfQty ?? 0,
+          shelfLocation: data.shelfLocation || null,
+          shelfMinQty: data.shelfMinQty ?? 0,
+          price: data.price !== undefined && data.price !== null ? data.price : null,
+          deletedAt: null,
+        },
+      });
+      return { product: formatProductResponse(reactivated) };
     }
 
     const newProduct = await prisma.product.create({
@@ -378,6 +412,7 @@ export class ProductService {
         shelfLocation: data.shelfLocation || null,
         shelfMinQty: data.shelfMinQty ?? 0,
         price: data.price !== undefined && data.price !== null ? data.price : null,
+        deletedAt: null,
       },
     });
 
@@ -389,8 +424,11 @@ export class ProductService {
    * Conforme policies.txt (tenant_update_products).
    */
   async update(id: string, data: UpdateProductInput, user: AuthUser) {
-    const product = await prisma.product.findUnique({
-      where: { id },
+    const product = await prisma.product.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+      },
     });
 
     if (!product) {
@@ -402,12 +440,11 @@ export class ProductService {
     }
 
     if (data.barcode && data.barcode !== product.barcode) {
-      const barcodeConflict = await prisma.product.findUnique({
+      const barcodeConflict = await prisma.product.findFirst({
         where: {
-          tenantId_barcode: {
-            tenantId: product.tenantId,
-            barcode: data.barcode,
-          },
+          tenantId: product.tenantId,
+          barcode: data.barcode,
+          deletedAt: null,
         },
       });
 
@@ -443,8 +480,11 @@ export class ProductService {
       throw new AppError('Quantidade a transferir deve ser maior que zero', 400);
     }
 
-    const product = await prisma.product.findUnique({
-      where: { id },
+    const product = await prisma.product.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+      },
     });
 
     if (!product) {
@@ -496,16 +536,18 @@ export class ProductService {
 
         let product: Product | null = null;
         if (item.productId) {
-          product = await tx.product.findUnique({
-            where: { id: item.productId },
+          product = await tx.product.findFirst({
+            where: {
+              id: item.productId,
+              deletedAt: null,
+            },
           });
         } else if (item.barcode) {
-          product = await tx.product.findUnique({
+          product = await tx.product.findFirst({
             where: {
-              tenantId_barcode: {
-                tenantId,
-                barcode: item.barcode,
-              },
+              tenantId,
+              barcode: item.barcode,
+              deletedAt: null,
             },
           });
         } else {
@@ -561,8 +603,11 @@ export class ProductService {
    * Conforme policies.txt (tenant_delete_products: tenant_id = public.get_tenant_id() OR public.is_super_admin()).
    */
   async delete(id: string, user: AuthUser) {
-    const product = await prisma.product.findUnique({
-      where: { id },
+    const product = await prisma.product.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+      },
     });
 
     if (!product) {
@@ -582,11 +627,67 @@ export class ProductService {
       );
     }
 
-    await prisma.product.delete({
+    // Soft delete: preenche deleted_at para preservar auditoria e permitir delta sync no PDV offline
+    const deletedProduct = await prisma.product.update({
       where: { id },
+      data: {
+        deletedAt: new Date(),
+      },
     });
 
-    return { message: 'Produto excluído com sucesso' };
+    return {
+      message: 'Produto excluído com sucesso (soft delete)',
+      product: formatProductResponse(deletedProduct),
+    };
+  }
+
+  /**
+   * Delta Sync por Timestamp (para sincronização com IndexedDB / PDV Offline).
+   * Retorna todos os produtos criados, atualizados ou excluídos (soft deleted) desde a data `since`.
+   */
+  async getDeltaSync(user: AuthUser, filter: ProductDeltaSyncFilter) {
+    const tenantId = this.resolveTenantId(user, filter.tenantId);
+    const limit = filter.limit ? Math.min(filter.limit, 1000) : 500;
+    const now = new Date();
+
+    // Busca todos os produtos cuja data updatedAt seja maior ou igual a 'since'
+    const products = await prisma.product.findMany({
+      where: {
+        tenantId,
+        updatedAt: {
+          gte: filter.since,
+        },
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: limit + 1,
+    });
+
+    const hasMore = products.length > limit;
+    const items = hasMore ? products.slice(0, limit) : products;
+
+    const upserted: FormattedProduct[] = [];
+    const deleted: FormattedProduct[] = [];
+    const deletedIds: string[] = [];
+
+    for (const prod of items) {
+      const formatted = formatProductResponse(prod);
+      if (prod.deletedAt) {
+        deleted.push(formatted);
+        deletedIds.push(prod.id);
+      } else {
+        upserted.push(formatted);
+      }
+    }
+
+    return {
+      syncedAt: now.toISOString(),
+      serverTimestamp: now.getTime(),
+      totalChanged: items.length,
+      hasMore,
+      upserted,
+      deletedIds,
+      deleted,
+    };
   }
 }
 

@@ -41,6 +41,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_products_tenant_barcode
 ON products (tenant_id, barcode);
 
 CREATE INDEX IF NOT EXISTS idx_products_tenant_id ON products (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_products_tenant_updated_at ON products (tenant_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tenants_owner_id ON tenants (owner_id);
 

@@ -13,6 +13,7 @@ export const productItemSchema = z.object({
     price: z.number().nullable().describe('Preço de venda unitário'),
     createdAt: z.date().describe('Data de criação'),
     updatedAt: z.date().describe('Data de última atualização'),
+    deletedAt: z.date().nullable().optional().describe('Data de exclusão lógica (soft delete) para delta sync'),
 });
 export const criticalProductItemSchema = productItemSchema.extend({
     deficit: z.number().int().describe('Déficit de unidades em relação ao mínimo de gôndola (shelfMinQty - shelfQty)'),
@@ -55,6 +56,11 @@ export const productListQuerySchema = z.object({
     limit: z.coerce.number().int().positive().max(100).default(50).optional().describe('Limite de registros retornados'),
     offset: z.coerce.number().int().min(0).default(0).optional().describe('Offset de paginação'),
 });
+export const productDeltaSyncQuerySchema = z.object({
+    since: z.string().datetime({ offset: true }).or(z.string().datetime()).describe('Timestamp ISO 8601 da última sincronização do cliente (IndexedDB)'),
+    tenantId: z.string().uuid('ID de tenant inválido').optional().describe('Filtrar por tenant específico (Super Admin apenas)'),
+    limit: z.coerce.number().int().positive().max(1000).default(500).optional().describe('Limite de registros por lote de sincronização'),
+});
 export const transferStockSchema = z.object({
     quantity: z.number().int().positive('Quantidade de transferência deve ser um número inteiro positivo maior que zero').describe('Quantidade a transferir do depósito para a gôndola'),
 });
@@ -64,9 +70,14 @@ export const posSaleItemSchema = z.object({
     quantity: z.number().int().positive('Quantidade deve ser maior que zero').default(1).describe('Quantidade vendida'),
     unitPrice: z.number().min(0, 'Preço unitário não pode ser negativo').optional().describe('Preço unitário praticado na venda'),
 });
+export const paymentSplitItemSchema = z.object({
+    method: z.enum(['DINHEIRO', 'PIX', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'OUTROS']),
+    amount: z.number().min(0, 'Valor de pagamento não pode ser negativo'),
+});
 export const posSaleSchema = z.object({
     items: z.array(posSaleItemSchema).min(1, 'A venda deve conter ao menos 1 item').describe('Lista de itens vendidos no PDV'),
-    paymentMethod: z.enum(['DINHEIRO', 'PIX', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'OUTROS']).default('DINHEIRO').describe('Forma de pagamento declaratória'),
+    paymentMethod: z.enum(['DINHEIRO', 'PIX', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'OUTROS', 'MULTIPLOS']).default('DINHEIRO').describe('Forma de pagamento declaratória'),
+    payments: z.array(paymentSplitItemSchema).optional().describe('Divisão detalhada quando há múltiplos pagamentos'),
     tenantId: z.string().uuid('ID de tenant inválido').optional().describe('Tenant da venda (Super Admin apenas)'),
 });
 export const openFoodFactsResponseSchema = z.object({
@@ -104,4 +115,13 @@ export const posSaleResponseSchema = z.object({
         soldQty: z.number().int(),
         remainingShelfQty: z.number().int(),
     })).describe('Produtos com baixa efetuada na gôndola'),
+});
+export const productDeltaSyncResponseSchema = z.object({
+    syncedAt: z.string().describe('Timestamp ISO do servidor no momento do sync'),
+    serverTimestamp: z.number().describe('Epoch timestamp em milissegundos para referência do cliente'),
+    totalChanged: z.number().int().describe('Total de registros criados, alterados ou deletados'),
+    hasMore: z.boolean().describe('Indica se há mais registros a sincronizar neste lote'),
+    upserted: z.array(productItemSchema).describe('Produtos criados ou atualizados desde o timestamp'),
+    deletedIds: z.array(z.string().uuid()).describe('IDs de produtos que foram excluídos desde o timestamp'),
+    deleted: z.array(productItemSchema).describe('Registros completos de produtos excluídos (soft deleted) desde o timestamp'),
 });

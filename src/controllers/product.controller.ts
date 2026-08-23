@@ -7,6 +7,7 @@ import {
   productParamsSchema,
   productBarcodeParamsSchema,
   productListQuerySchema,
+  productDeltaSyncQuerySchema,
   transferStockSchema,
   posSaleSchema,
 } from '../schemas/product.schema.js';
@@ -238,6 +239,32 @@ export class ProductController {
         return reply.status(error.statusCode).send({ error: error.message });
       }
       return reply.status(500).send({ error: 'Erro ao excluir produto' });
+    }
+  }
+
+  async getDeltaSync(request: FastifyRequest, reply: FastifyReply) {
+    const user = request.user!;
+    const parseQuery = productDeltaSyncQuerySchema.safeParse(request.query);
+
+    if (!parseQuery.success) {
+      return reply.status(400).send({
+        error: 'Parâmetros de sincronização delta inválidos',
+        details: parseQuery.error.format(),
+      });
+    }
+
+    try {
+      const result = await productService.getDeltaSync(user, {
+        since: new Date(parseQuery.data.since),
+        tenantId: parseQuery.data.tenantId,
+        limit: parseQuery.data.limit,
+      });
+      return reply.status(200).send(result);
+    } catch (error) {
+      if (error instanceof AppError) {
+        return reply.status(error.statusCode).send({ error: error.message });
+      }
+      return reply.status(500).send({ error: 'Erro ao processar sincronização delta' });
     }
   }
 }

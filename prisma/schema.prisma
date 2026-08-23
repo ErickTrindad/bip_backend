@@ -68,23 +68,25 @@ model User {
 }
 
 model Product {
-  id            String   @id @default(uuid()) @db.Uuid
-  tenantId      String   @map("tenant_id") @db.Uuid
-  barcode       String   @map("barcode")
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  barcode       String    @map("barcode")
   name          String
   category      String?
-  depotQty      Int      @default(0) @map("depot_qty")
-  depotLocation String?  @map("depot_location")
-  shelfQty      Int      @default(0) @map("shelf_qty")
-  shelfLocation String?  @map("shelf_location")
-  shelfMinQty   Int      @default(0) @map("shelf_min_qty")
-  price         Decimal? @db.Decimal(10, 2)
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  depotQty      Int       @default(0) @map("depot_qty")
+  depotLocation String?   @map("depot_location")
+  shelfQty      Int       @default(0) @map("shelf_qty")
+  shelfLocation String?   @map("shelf_location")
+  shelfMinQty   Int       @default(0) @map("shelf_min_qty")
+  price         Decimal?  @db.Decimal(10, 2)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, barcode], map: "idx_products_tenant_barcode")
   @@index([tenantId], map: "idx_products_tenant_id")
+  @@index([tenantId, updatedAt], map: "idx_products_tenant_updated_at")
   @@map("products")
 }

@@ -234,6 +234,110 @@
           }
         }
       ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products",
+              "host": ["{{baseUrl}}"],
+              "path": ["products"]
+            }
+          }
+        },
+        {
+          "name": "Delta Sync (IndexedDB Offline)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products/sync/delta?since=2026-08-01T00:00:00.000Z",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", "sync", "delta"],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "2026-08-01T00:00:00.000Z"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Critical Shelf Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products/critical",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", "critical"]
+            }
+          }
+        },
+        {
+          "name": "POS Sale",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentMethod\": \"DINHEIRO\",\n  \"items\": [\n    {\n      \"barcode\": \"7891000100103\",\n      \"quantity\": 2\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/products/pos/sale",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", "pos", "sale"]
+            }
+          }
+        },
+        {
+          "name": "Delete Product (Soft Delete)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products/8f3b145d-7a1b-4f9e-bc43-228741369def",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", "8f3b145d-7a1b-4f9e-bc43-228741369def"]
+            }
+          }
+        }
+      ]
     }
   ]
 }
