@@ -44,12 +44,17 @@ export interface PosSaleItemInput {
   unitPrice?: number;
 }
 
+export interface PosSalePaymentSplitInput {
+  method: 'DINHEIRO' | 'PIX' | 'CARTAO_DEBITO' | 'CARTAO_CREDITO' | 'OUTROS';
+  amount: number;
+}
+
 export interface PosSaleInput {
   items: PosSaleItemInput[];
   paymentMethod?: string;
+  payments?: PosSalePaymentSplitInput[];
   tenantId?: string;
 }
-
 // Limite do Plano Free conforme definido no Roadmap MVP (Semana 5 / Freemium - 100 SKUs)
 const FREE_TIER_MAX_PRODUCTS = 100;
 

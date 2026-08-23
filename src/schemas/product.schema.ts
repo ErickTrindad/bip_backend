@@ -74,12 +74,17 @@ export const posSaleItemSchema = z.object({
   unitPrice: z.number().min(0, 'Preço unitário não pode ser negativo').optional().describe('Preço unitário praticado na venda'),
 });
 
-export const posSaleSchema = z.object({
-  items: z.array(posSaleItemSchema).min(1, 'A venda deve conter ao menos 1 item').describe('Lista de itens vendidos no PDV'),
-  paymentMethod: z.enum(['DINHEIRO', 'PIX', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'OUTROS']).default('DINHEIRO').describe('Forma de pagamento declaratória'),
-  tenantId: z.string().uuid('ID de tenant inválido').optional().describe('Tenant da venda (Super Admin apenas)'),
+export const paymentSplitItemSchema = z.object({
+  method: z.enum(['DINHEIRO', 'PIX', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'OUTROS']),
+  amount: z.number().min(0, 'Valor de pagamento não pode ser negativo'),
 });
 
+export const posSaleSchema = z.object({
+  items: z.array(posSaleItemSchema).min(1, 'A venda deve conter ao menos 1 item').describe('Lista de itens vendidos no PDV'),
+  paymentMethod: z.enum(['DINHEIRO', 'PIX', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'OUTROS', 'MULTIPLOS']).default('DINHEIRO').describe('Forma de pagamento declaratória'),
+  payments: z.array(paymentSplitItemSchema).optional().describe('Divisão detalhada quando há múltiplos pagamentos'),
+  tenantId: z.string().uuid('ID de tenant inválido').optional().describe('Tenant da venda (Super Admin apenas)'),
+});
 export const openFoodFactsResponseSchema = z.object({
   status: z.number().describe('Status da busca (1 para encontrado, 0 para não encontrado)'),
   statusVerbose: z.string().describe('Mensagem descritiva do status'),
