@@ -61,7 +61,7 @@ export class ProductService {
             const data = response.data;
             if (data && data.status === 1 && data.product) {
                 const p = data.product;
-                const name = p.product_name_pt || p.product_name || p.generic_name_pt || p.generic_name || 'Produto sem nome';
+                const name = p.product_name || p.product_name_pt || p.generic_name_pt || p.generic_name || 'Produto sem nome';
                 const category = p.categories_tags?.[0]?.replace(/^[^:]+:/, '') || p.categories || null;
                 const brands = p.brands || null;
                 const imageUrl = p.image_front_url || p.image_url || null;

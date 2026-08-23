@@ -636,3 +636,112 @@ Remove um produto do catálogo da empresa.
   "message": "Produto excluído com sucesso"
 }
 ```
+
+---
+
+Integração de altíssima velocidade (< 500ms) com a **Groq Cloud** utilizando:
+- **Whisper Large v3**: Transcrição de áudio em português com alta precisão e cancelamento de ruído de fundo (freezers, caixas, movimentação de loja).
+- **Llama 3.3 / Llama 3.1**: Inferência semântica com fallback dinâmico e estruturação de comandos operacionais em JSON.
+- **Matching Semântico Inteligente**: Localiza produtos cadastrados mesmo se o operador falar nomes com variações (ex: *"Guaraná Zero 2L"* localiza *"Refrigerante Guaraná Antarctica Zero 2 Litros"*).
+- **Suporte a Atualização de Preço e Dados**: Intenção `UPDATE_PRODUCT` para reajustes de preço, localizações e estoque mínimo por voz.
+- **Compatibilidade OpenAI**: URL base (`GROQ_BASE_URL`) pode ser migrada sem alterar regras de negócio.
+
+---
+
+### `POST /ai/transcribe` (Transcrição via Base64)
+Transcreve áudio gravado no app ou PWA enviado em string Base64.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  Content-Type: application/json
+  ```
+- **Body Esperado (JSON)**:
+```json
+{
+  "audioBase64": "GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOAZwH/////////FUmpZpkq17GDD0JATYCGQ2hy...",
+  "filename": "audio.m4a",
+  "language": "pt",
+  "prompt": "Vocabulário de varejo: gôndola, depósito, leite, fardo"
+}
+```
+- **Resposta Sucesso (`200 OK`)**:
+```json
+{
+  "text": "Transferir 10 caixas de leite integral para a gôndola",
+  "model": "whisper-large-v3",
+  "duration": 2.45
+}
+```
+
+---
+
+### `POST /ai/transcribe/upload` (Transcrição via Multipart/Form-Data)
+Permite enviar o arquivo de áudio diretamente como multipart (ex: via `FormData` no frontend).
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  Content-Type: multipart/form-data
+  ```
+- **Form Fields**:
+  - `file`: Arquivo de áudio binário (`.m4a`, `.mp3`, `.wav`, `.webm`, `.ogg`)
+  - `language`: `pt` (opcional)
+  - `prompt`: Contexto prévio (opcional)
+
+---
+
+### `POST /ai/chat` (Inferência Rápida com Llama 3.3)
+Consulta ultra-rápida ao Llama 3.3 com suporte a modo JSON.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  Content-Type: application/json
+  ```
+- **Body Esperado (JSON)**:
+```json
+{
+  "prompt": "Resuma as 3 categorias mais críticas para reposição no varejo de vizinhança.",
+  "systemPrompt": "Você é um consultor especialista em gestão de estoque para pequenos varejos.",
+  "model": "llama-3.3-70b-versatile",
+  "temperature": 0.1,
+  "jsonMode": false
+}
+```
+
+---
+
+### `POST /ai/voice-command` (Comando de Voz Inteligente para Chão de Loja)
+Pipeline integrado: **Whisper Large v3** transcreve a voz do repositor -> **Llama 3.3** extrai a intenção e parâmetros -> se `autoExecute: true`, realiza a operação de estoque no banco de dados.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  Content-Type: application/json
+  ```
+- **Body Esperado (JSON)**:
+```json
+{
+  "audioBase64": "GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOAZwH...",
+  "filename": "comando.m4a",
+  "autoExecute": true
+}
+```
+- **Resposta Sucesso (`200 OK`)**:
+```json
+{
+  "transcription": "Movi cinco unidades de leite condensado pro corredor 4",
+  "intent": "TRANSFER_STOCK",
+  "extractedData": {
+    "productQuery": "leite condensado",
+    "quantity": 5,
+    "to": "shelf"
+  },
+  "explanation": "Transferência de 5 unidades de leite condensado para a gôndola solicitada.",
+  "executed": true,
+  "executionResult": {
+    "message": "Transferência de 5 un de Leite Condensado Moça Lata 395g realizada com sucesso."
+  }
+}
+```

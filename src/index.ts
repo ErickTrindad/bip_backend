@@ -18,6 +18,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
+import multipart from "@fastify/multipart";
 import {
   jsonSchemaTransform,
   serializerCompiler,
@@ -28,6 +29,7 @@ import { authRoutes } from "./routes/auth.routes.js";
 import { tenantRoutes } from "./routes/tenant.routes.js";
 import { productRoutes } from "./routes/product.routes.js";
 import { prisma } from "./lib/prisma.js";
+import { aiRoutes } from "./routes/ai.routes.js";
 
 const app = Fastify({
   logger: true,
@@ -44,6 +46,13 @@ await app.register(cors, {
   allowedHeaders: ["Authorization", "Content-Type", "Accept"],
 });
 
+
+// Suporte a upload de arquivos (áudio para transcrição Whisper)
+await app.register(multipart, {
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB
+  },
+});
 // Swagger / OpenAPI Documentação
 await app.register(swagger, {
   openapi: {
@@ -105,6 +114,7 @@ app.get(
 await app.register(authRoutes);
 await app.register(tenantRoutes);
 await app.register(productRoutes);
+await app.register(aiRoutes);
 const port = Number(process.env.PORT) || 3333;
 
 try {

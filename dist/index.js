@@ -15,10 +15,13 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
+import multipart from "@fastify/multipart";
 import { jsonSchemaTransform, serializerCompiler, validatorCompiler, } from "fastify-type-provider-zod";
 import { authRoutes } from "./routes/auth.routes.js";
 import { tenantRoutes } from "./routes/tenant.routes.js";
 import { productRoutes } from "./routes/product.routes.js";
+import { prisma } from "./lib/prisma.js";
+import { aiRoutes } from "./routes/ai.routes.js";
 const app = Fastify({
     logger: true,
 }).withTypeProvider();
@@ -29,7 +32,13 @@ app.setSerializerCompiler(serializerCompiler);
 await app.register(cors, {
     origin: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ['Authorization', 'Content-Type', 'Accept']
+    allowedHeaders: ["Authorization", "Content-Type", "Accept"],
+});
+// Suporte a upload de arquivos (áudio para transcrição Whisper)
+await app.register(multipart, {
+    limits: {
+        fileSize: 25 * 1024 * 1024, // 25MB
+    },
 });
 // Swagger / OpenAPI Documentação
 await app.register(swagger, {
@@ -73,12 +82,17 @@ app.get("/ping", {
         summary: "Status do Servidor",
     },
 }, async (_request, _reply) => {
-    return { message: "pong", timestamp: new Date().toISOString() };
+    const result = await prisma.$queryRaw `Select 1 As up`;
+    return {
+        message: "pong",
+        timestamp: new Date().toISOString(),
+    };
 });
 // Registrar rotas da aplicação
 await app.register(authRoutes);
 await app.register(tenantRoutes);
 await app.register(productRoutes);
+await app.register(aiRoutes);
 const port = Number(process.env.PORT) || 3333;
 try {
     await app.listen({ port, host: "0.0.0.0" });
