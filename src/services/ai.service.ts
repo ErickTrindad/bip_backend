@@ -80,23 +80,32 @@ interface ActionItem {
 
 export type { VoiceIntent };
 
-interface ParsedVoiceCommand {
+export interface UniversalBatchConfig {
+  operation?: 'TRANSFER' | 'UPDATE_PRICE' | 'STOCK_ENTRY';
+  scope?: 'ALL' | 'CRITICAL_ONLY' | 'CATEGORY' | 'SPECIFIC';
+  category?: string | null;
+  from?: 'depot' | 'shelf' | null;
+  to?: 'depot' | 'shelf' | null;
+  quantityRule?: 'DEFICIT' | 'ALL' | 'EXACT' | 'PERCENTAGE';
+  quantityValue?: number | null;
+  percentage?: number | null;
+  newPrice?: number | null;
+}
+export interface UniversalDirectAction {
+  action: 'TRANSFER_STOCK' | 'STOCK_ENTRY' | 'UPDATE_PRODUCT' | 'POS_SALE' | 'REGISTER_PRODUCT' | 'CHECK_STOCK';
+  productQuery?: string | null;
+  quantity?: number | null;
+  price?: number | null;
+  from?: 'depot' | 'shelf' | null;
+  to?: 'depot' | 'shelf' | null;
+  destination?: 'depot' | 'shelf' | null;
+}
+
+interface ParsedUniversalVoiceResponse {
+  isBatch?: boolean;
+  batchConfig?: UniversalBatchConfig;
+  directActions?: UniversalDirectAction[];
   intent?: VoiceIntent;
-  extractedData?: {
-    productQuery?: string;
-    quantity?: number;
-    price?: number;
-    newPrice?: number;
-    destination?: 'depot' | 'shelf';
-    from?: 'depot' | 'shelf';
-    to?: 'depot' | 'shelf';
-    paymentMethod?: 'MONEY' | 'CREDIT_CARD' | 'DEBIT_CARD' | 'PIX';
-    barcode?: string;
-    depotLocation?: string;
-    shelfLocation?: string;
-    shelfMinQty?: number;
-  };
-  actions?: ActionItem[];
   explanation?: string;
 }
 
@@ -508,64 +517,66 @@ export class GroqService {
         executed: false,
       };
     }
-
-    // 2. Extração semântica com suporte explícito a múltiplos produtos
+    // 2. Extração semântica com Arquitetura Universal (Escopo, Direção e Regra de Quantidade)
     const systemPrompt =
       options?.systemPrompt ||
       `Você é o assistente de inteligência artificial de estoque do GO PME.
-Sua missão é identificar com precisão TODAS as ações e TODOS os produtos mencionados na frase do operador.
+Sua missão é classificar a intenção do operador em um modelo universal e paramétrico:
 
-MUITO IMPORTANTE: A frase pode conter 1, 2 ou mais produtos diferentes com ações diferentes.
-Exemplo: "Adiciona 50 unidades do produto Guaraná Antarctica Zero e cadastra o produto Guaraná Antarctica 2 litros. Ele tem 15 unidades no depósito e 5 na gôndola."
--> Neste exemplo, temos 2 produtos e 2 ações distintas:
-   1) Ação "STOCK_ENTRY": productQuery="Guaraná Antarctica Zero", quantity=50, destination="depot" (ou entrada)
-   2) Ação "REGISTER_PRODUCT": productQuery="Guaraná Antarctica 2 litros", depotQty=15, shelfQty=5
+IMPORTANTE SOBRE QUANTIDADES:
+- Quantidades de produtos em estoque DEVEM ser SEMPRE números inteiros (arredondados).
+- Suporte a porcentagens: Quando o usuário disser "transfere 50% de cada produto", "move 30% da gôndola", "reponha 20% das bebidas", defina "quantityRule": "PERCENTAGE" e "percentage": 50 (ou o valor correspondente de 1 a 100).
 
-Ações suportadas por item:
-- "REPLENISH_ALL_CRITICAL": Varredura geral do depósito para reposição em lote de gôndolas críticas. (Ex: "faça uma varredura no depósito", "reponha todas as gôndolas críticas", "transfere tudo que tá faltando na gôndola", "repor produtos críticos").
-- "STOCK_ENTRY": Entrada/adição/compra de mercadorias no estoque. (Ex: "Adiciona 50 unidades de...", "Comprei 10 fardos de...").
-- "REGISTER_PRODUCT": Cadastro de novo produto. (Ex: "cadastra o produto...", "novo produto com X no depósito e Y na gôndola").
-- "UPDATE_PRODUCT": Atualização de preço, localização ou estoque mínimo. (Ex: "muda o preço para 12.00").
-- "TRANSFER_STOCK": Transferência interna específica de produto (Depósito <-> Gôndola).
-- "POS_SALE": Venda no caixa / PDV.
-- "CHECK_STOCK": Consulta de saldo / preço.
+Classifique se a frase se refere a:
+1. "isBatch": true -> Operação em lote/escopo amplo (toda a loja, categoria inteira, gôndolas críticas ou percentual).
+   Exemplos:
+   - "Transfere 50% de cada produto pra gôndola" / "Move metade do depósito pra gôndola":
+     -> isBatch: true, batchConfig: { operation: "TRANSFER", scope: "ALL", from: "depot", to: "shelf", quantityRule: "PERCENTAGE", percentage: 50 }
+   - "Transfere 25% de todas as bebidas pro salão":
+     -> isBatch: true, batchConfig: { operation: "TRANSFER", scope: "CATEGORY", category: "Bebidas", from: "depot", to: "shelf", quantityRule: "PERCENTAGE", percentage: 25 }
+   - "Faz uma varredura no estoque e repõe o que tá faltando na gôndola" / "Repõe tudo que tá crítico":
+     -> isBatch: true, batchConfig: { operation: "TRANSFER", scope: "CRITICAL_ONLY", from: "depot", to: "shelf", quantityRule: "DEFICIT" }
+   - "Guarda tudo da gôndola no depósito":
+     -> isBatch: true, batchConfig: { operation: "TRANSFER", scope: "ALL", from: "shelf", to: "depot", quantityRule: "ALL" }
+   - "Transfere 10 unidades de todas as bebidas pro salão/gôndola":
+     -> isBatch: true, batchConfig: { operation: "TRANSFER", scope: "CATEGORY", category: "Bebidas", from: "depot", to: "shelf", quantityRule: "EXACT", quantityValue: 10 }
 
-Regras:
-1. Se o comando for uma varredura geral ou reposição em lote de todos os produtos críticos (sem especificar um único produto), defina "intent": "REPLENISH_ALL_CRITICAL", actions: [] e explanation amigável.
-2. Sempre gere a lista "actions" com uma entrada individual para CADA produto/ação mencionado.
-3. Se houver mais de 1 ação na lista, defina "intent": "COMPOUND_ACTION". Se houver apenas 1, defina "intent" com o nome da respectiva ação.
-4. Preencha os campos numéricos (quantity, price, depotQty, shelfQty) de cada ação individualmente.
+2. "isBatch": false -> Ações diretas sobre produtos unitários ou múltiplos produtos nomeados.
+   Exemplos:
+   - "Transfere 2 Guaraná Antarctica zero pra gôndola":
+     -> isBatch: false, directActions: [{ action: "TRANSFER_STOCK", productQuery: "Guaraná Antarctica zero", quantity: 2, from: "depot", to: "shelf", destination: "shelf" }]
+   - "Vendi 3 leites condensados no dinheiro":
+     -> isBatch: false, directActions: [{ action: "POS_SALE", productQuery: "leite condensado", quantity: 3 }]
+   - "Muda o preço da Coca Cola 2L para 10.50":
+     -> isBatch: false, directActions: [{ action: "UPDATE_PRODUCT", productQuery: "Coca Cola 2L", price: 10.50 }]
 
 Você DEVE responder ESTRITAMENTE em formato JSON:
 {
-  "intent": "UPDATE_PRODUCT" | "TRANSFER_STOCK" | "REPLENISH_ALL_CRITICAL" | "STOCK_ENTRY" | "POS_SALE" | "CHECK_STOCK" | "REGISTER_PRODUCT" | "COMPOUND_ACTION" | "UNKNOWN",
-  "extractedData": {
-    "productQuery": string ou null (primeiro produto mencionado ou resumo),
-    "price": number ou null,
-    "newPrice": number ou null,
-    "quantity": number ou null,
-    "depotQty": number ou null,
-    "shelfQty": number ou null,
-    "from": "depot" | "shelf" ou null,
-    "to": "depot" | "shelf" ou null,
-    "destination": "depot" | "shelf" ou null
+  "isBatch": boolean,
+  "batchConfig": {
+    "operation": "TRANSFER" | "UPDATE_PRICE" | "STOCK_ENTRY",
+    "scope": "ALL" | "CRITICAL_ONLY" | "CATEGORY" | "SPECIFIC",
+    "category": string | null,
+    "from": "depot" | "shelf" | null,
+    "to": "depot" | "shelf" | null,
+    "quantityRule": "DEFICIT" | "ALL" | "EXACT" | "PERCENTAGE",
+    "quantityValue": number | null,
+    "percentage": number | null,
+    "newPrice": number | null
   },
-  "actions": [
+  "directActions": [
     {
-      "action": "UPDATE_PRODUCT" | "TRANSFER_STOCK" | "STOCK_ENTRY" | "POS_SALE" | "CHECK_STOCK" | "REGISTER_PRODUCT",
-      "productQuery": string (nome exato deste produto),
-      "price": number ou null,
-      "quantity": number ou null,
-      "depotQty": number ou null (quantidade no depósito quando for cadastro),
-      "shelfQty": number ou null (quantidade na gôndola quando for cadastro),
-      "from": "depot" | "shelf" ou null,
-      "to": "depot" | "shelf" ou null,
-      "destination": "depot" | "shelf" ou null
+      "action": "TRANSFER_STOCK" | "STOCK_ENTRY" | "UPDATE_PRODUCT" | "POS_SALE" | "REGISTER_PRODUCT" | "CHECK_STOCK",
+      "productQuery": string,
+      "quantity": number | null,
+      "price": number | null,
+      "from": "depot" | "shelf" | null,
+      "to": "depot" | "shelf" | null,
+      "destination": "depot" | "shelf" | null
     }
   ],
-  "explanation": "Resumo amigável em português explicando todas as ações que serão realizadas para cada produto"
+  "explanation": "Explicação em português simples e claro do que foi compreendido"
 }`;
-
     const chatResult = await this.chatPrompt({
       prompt: `Texto transcrito pelo operador: "${transcription}"`,
       systemPrompt,
@@ -573,92 +584,78 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
       jsonMode: true,
     });
 
-    const parsed = (chatResult.parsedJson as ParsedVoiceCommand) || {};
-    const intent = (parsed.intent || 'UNKNOWN') as VoiceIntent;
-    const extractedData = parsed.extractedData || {};
-    let explanation = parsed.explanation || 'Comando interpretado com sucesso.';
-    // Normaliza os campos price e newPrice
-    const resolvedPrice =
-      extractedData.price !== undefined && extractedData.price !== null
-        ? Number(extractedData.price)
-        : extractedData.newPrice !== undefined && extractedData.newPrice !== null
-        ? Number(extractedData.newPrice)
-        : undefined;
+    const parsed = (chatResult.parsedJson as ParsedUniversalVoiceResponse) || {};
+    const normalizedTranscription = transcription.toLowerCase();
+    const isScanCommand =
+      normalizedTranscription.includes('varredura') ||
+      normalizedTranscription.includes('todos os produtos') ||
+      normalizedTranscription.includes('todas as gondolas') ||
+      normalizedTranscription.includes('todas as gôndolas') ||
+      normalizedTranscription.includes('tudo que tiver') ||
+      normalizedTranscription.includes('repor estoque') ||
+      normalizedTranscription.includes('menor do que a minima') ||
+      normalizedTranscription.includes('menor do que a mínima');
 
-    // Normaliza a lista de ações a executar
-    const rawActions = parsed.actions && parsed.actions.length > 0 ? parsed.actions : [];
-    const actionList: ActionItem[] =
-      rawActions.length > 0
-        ? rawActions.map((act) => ({
-            ...act,
-            price:
-              act.price !== undefined && act.price !== null
-                ? Number(act.price)
-                : act.action === 'UPDATE_PRODUCT'
-                ? resolvedPrice
-                : undefined,
-            depotQty:
-              act.depotQty !== undefined && act.depotQty !== null
-                ? Number(act.depotQty)
-                : undefined,
-            shelfQty:
-              act.shelfQty !== undefined && act.shelfQty !== null
-                ? Number(act.shelfQty)
-                : undefined,
-          }))
-        : intent !== 'UNKNOWN' && intent !== 'COMPOUND_ACTION' && intent !== 'REPLENISH_ALL_CRITICAL'
-        ? [
-            {
-              action: intent,
-              productQuery: extractedData.productQuery,
-              price: resolvedPrice,
-              quantity: extractedData.quantity,
-              depotQty: extractedData.depotLocation ? Number(extractedData.quantity) : undefined,
-              shelfQty: extractedData.shelfLocation ? Number(extractedData.quantity) : undefined,
-              from: extractedData.from,
-              to: extractedData.to,
-              destination: extractedData.destination,
-              depotLocation: extractedData.depotLocation,
-              shelfLocation: extractedData.shelfLocation,
-              shelfMinQty: extractedData.shelfMinQty,
-              barcode: extractedData.barcode,
-              paymentMethod: extractedData.paymentMethod,
-            },
-          ]
-        : [];
+    const isBatch = parsed.isBatch ?? isScanCommand;
+    const batchConfig = parsed.batchConfig || {
+      operation: 'TRANSFER' as const,
+      scope: isScanCommand ? ('CRITICAL_ONLY' as const) : ('ALL' as const),
+      from: 'depot' as const,
+      to: 'shelf' as const,
+      quantityRule: isScanCommand ? ('DEFICIT' as const) : ('ALL' as const),
+    };
 
+    const actionList: ActionItem[] = [];
     const matchedProductsMap = new Map<string, MatchedProductSummary>();
     const executedResults: unknown[] = [];
+    let explanation = parsed.explanation || 'Comando interpretado com sucesso.';
+    let intent: VoiceIntent = 'UNKNOWN';
 
-    // Interceptador para varredura e reposição em lote de gôndolas críticas
-    if (intent === 'REPLENISH_ALL_CRITICAL' && user.tenantId) {
-      const activeProductsInDepot = await prisma.product.findMany({
-        where: {
-          tenantId: user.tenantId,
-          deletedAt: null,
-          depotQty: { gt: 0 },
-        },
+    // 3. Resolução Dinâmica (Batch vs Direto)
+    if (isBatch && user.tenantId) {
+      const whereClause: { tenantId: string; deletedAt: null; category?: { contains: string; mode: 'insensitive' } } = {
+        tenantId: user.tenantId,
+        deletedAt: null,
+      };
+
+      if (batchConfig.category) {
+        whereClause.category = { contains: batchConfig.category, mode: 'insensitive' };
+      }
+
+      const products = await prisma.product.findMany({
+        where: whereClause,
         orderBy: { name: 'asc' },
       });
 
-      const criticalProducts = activeProductsInDepot.filter(
-        (prod) => prod.shelfQty <= prod.shelfMinQty
-      );
+      const fromLocation = batchConfig.from || 'depot';
+      const toLocation = batchConfig.to || 'shelf';
+      const rule = batchConfig.quantityRule || 'DEFICIT';
 
-      actionList.length = 0; // Limpa lista prévia
+      for (const prod of products) {
+        let calculatedQty = 0;
 
-      if (criticalProducts.length === 0) {
-        explanation =
-          'Varredura concluída: Nenhuma gôndola crítica necessita de reposição ou o depósito não possui estoque disponível no momento.';
-      } else {
-        explanation = `Varredura concluída: Identificamos ${criticalProducts.length} produto(s) com gôndola crítica prontos para reposição.`;
+        if (batchConfig.scope === 'CRITICAL_ONLY' || rule === 'DEFICIT') {
+          if (prod.shelfQty <= prod.shelfMinQty && prod.depotQty > 0) {
+            calculatedQty = Math.floor(Math.min(Math.max(1, prod.shelfMinQty - prod.shelfQty), prod.depotQty));
+          }
+        } else if (rule === 'PERCENTAGE') {
+          const pct = Number(batchConfig.percentage || 0);
+          const validPct = Math.min(Math.max(1, pct), 100);
+          const available = fromLocation === 'shelf' ? prod.shelfQty : prod.depotQty;
+          calculatedQty = Math.round((available * validPct) / 100);
+          // Se houver saldo e o arredondamento der 0, transfere no mínimo 1 se o percentual for > 0
+          if (calculatedQty === 0 && available > 0 && validPct > 0) {
+            calculatedQty = 1;
+          }
+        } else if (rule === 'ALL') {
+          calculatedQty = fromLocation === 'shelf' ? prod.shelfQty : prod.depotQty;
+        } else if (rule === 'EXACT' && batchConfig.quantityValue) {
+          const available = fromLocation === 'shelf' ? prod.shelfQty : prod.depotQty;
+          calculatedQty = Math.floor(Math.min(Math.max(1, Number(batchConfig.quantityValue)), available));
+        }
+        calculatedQty = Math.floor(Math.max(0, calculatedQty));
 
-        for (const prod of criticalProducts) {
-          const transferQty = Math.min(
-            Math.max(1, prod.shelfMinQty - prod.shelfQty),
-            prod.depotQty
-          );
-
+        if (calculatedQty > 0) {
           const summary: MatchedProductSummary = {
             id: prod.id,
             name: prod.name,
@@ -671,22 +668,62 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
           actionList.push({
             action: 'TRANSFER_STOCK',
             productQuery: prod.name,
-            quantity: transferQty,
-            from: 'depot',
-            to: 'shelf',
-            destination: 'shelf',
+            quantity: calculatedQty,
+            from: fromLocation,
+            to: toLocation,
+            destination: toLocation,
             matchedProduct: summary,
           });
 
           matchedProductsMap.set(prod.id, summary);
         }
       }
+
+      if (actionList.length === 0) {
+        explanation =
+          batchConfig.scope === 'CRITICAL_ONLY' || rule === 'DEFICIT'
+            ? 'Varredura concluída: Nenhuma gôndola está abaixo do mínimo ou não há saldo no depósito para repor.'
+            : 'Nenhum produto atendeu aos critérios para movimentação em lote ou o saldo no local de origem está zerado.';
+      } else {
+        explanation = `Operação em lote preparada: ${actionList.length} produto(s) selecionado(s) para movimentação (${fromLocation === 'depot' ? 'Depósito -> Gôndola' : 'Gôndola -> Depósito'}).`;
+      }
+
+      intent = batchConfig.scope === 'CRITICAL_ONLY' || rule === 'DEFICIT' ? 'REPLENISH_ALL_CRITICAL' : 'TRANSFER_STOCK';
+    } else {
+      // Ações Diretas
+      const directActions = parsed.directActions && parsed.directActions.length > 0 ? parsed.directActions : [];
+
+      for (const item of directActions) {
+        const actionType = item.action || 'TRANSFER_STOCK';
+        const resolvedDestination = item.destination || item.to || (item.from === 'shelf' ? 'depot' : 'shelf');
+        const isToDepot = resolvedDestination === 'depot' || item.to === 'depot' || item.from === 'shelf';
+        const rawQty = item.quantity !== undefined && item.quantity !== null ? Number(item.quantity) : undefined;
+        const intQty = rawQty !== undefined ? Math.floor(Math.max(1, Math.round(rawQty))) : undefined;
+
+        actionList.push({
+          action: actionType,
+          productQuery: item.productQuery || undefined,
+          quantity: intQty,
+          price: item.price !== undefined && item.price !== null ? Number(item.price) : undefined,
+          from: item.from || (isToDepot ? 'shelf' : 'depot'),
+          to: item.to || (isToDepot ? 'depot' : 'shelf'),
+          destination: resolvedDestination,
+        });
+      }
+
+      if (actionList.length === 1) {
+        intent = actionList[0].action as VoiceIntent;
+      } else if (actionList.length > 1) {
+        intent = 'COMPOUND_ACTION';
+      } else {
+        intent = 'UNKNOWN';
+      }
     }
 
-    // Localiza os produtos de cada ação
+    // Localiza produtos nas ações diretas (se ainda não vinculados)
     if (user.tenantId) {
       for (const item of actionList) {
-        if (item.productQuery) {
+        if (!item.matchedProduct && item.productQuery) {
           const found = await this.findProductByQuery(item.productQuery, user.tenantId);
           if (found) {
             const summary: MatchedProductSummary = {
@@ -714,7 +751,7 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
           : null;
 
         if (item.action === 'STOCK_ENTRY' && item.quantity) {
-          const qty = Number(item.quantity);
+          const qty = Math.floor(Math.max(1, Math.round(Number(item.quantity))));
           const destination = item.destination || 'depot';
 
           if (targetProduct) {
@@ -753,11 +790,10 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
           }
         } else if (item.action === 'REGISTER_PRODUCT' && item.productQuery) {
           const generatedBarcode = item.barcode || `AUTO-${Date.now().toString().slice(-8)}`;
-          const initialDepot = item.depotQty !== undefined ? Number(item.depotQty) : item.quantity ? Number(item.quantity) : 0;
-          const initialShelf = item.shelfQty !== undefined ? Number(item.shelfQty) : 0;
+          const initialDepot = item.depotQty !== undefined ? Math.floor(Math.max(0, Number(item.depotQty))) : item.quantity ? Math.floor(Math.max(0, Number(item.quantity))) : 0;
+          const initialShelf = item.shelfQty !== undefined ? Math.floor(Math.max(0, Number(item.shelfQty))) : 0;
 
           if (targetProduct) {
-            // Se já existir, atualiza as quantidades informadas
             const updated = await prisma.product.update({
               where: { id: targetProduct.id },
               data: {
@@ -792,7 +828,7 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
             executedResults.push(item.result);
           }
         } else if (item.action === 'UPDATE_PRODUCT' && targetProduct) {
-          const effectivePrice = item.price ?? resolvedPrice;
+          const effectivePrice = item.price;
           const updatePayload: {
             price?: number;
             depotLocation?: string;
@@ -810,7 +846,7 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
             updatePayload.shelfLocation = item.shelfLocation;
           }
           if (item.shelfMinQty !== undefined && item.shelfMinQty !== null) {
-            updatePayload.shelfMinQty = Number(item.shelfMinQty);
+            updatePayload.shelfMinQty = Math.floor(Math.max(0, Number(item.shelfMinQty)));
           }
 
           const updated = await productService.update(targetProduct.id, updatePayload, user);
@@ -821,15 +857,15 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
           };
           executedResults.push(item.result);
         } else if (item.action === 'TRANSFER_STOCK' && targetProduct && item.quantity) {
-          const qty = Number(item.quantity);
-          const from = item.from || 'shelf';
-          const to = item.to || 'depot';
+          const qty = Math.floor(Math.max(1, Math.round(Number(item.quantity))));
+          const resolvedDestination = item.destination || item.to || (item.from === 'shelf' ? 'depot' : 'shelf');
+          const isToDepot = resolvedDestination === 'depot' || item.to === 'depot' || item.from === 'shelf';
 
           let updatedProd;
-          if (from === 'shelf' && to === 'depot') {
+          if (isToDepot && (item.from === 'shelf' || item.to === 'depot')) {
             if (targetProduct.shelfQty < qty) {
               throw new AppError(
-                `Estoque insuficiente na gôndola para transferir ao depósito. Gôndola possui ${targetProduct.shelfQty} un.`,
+                `Estoque insuficiente na gôndola para transferir ao depósito. Gôndola de "${targetProduct.name}" possui ${targetProduct.shelfQty} un.`,
                 400
               );
             }
@@ -847,7 +883,7 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
 
           item.executed = true;
           item.result = {
-            message: `Transferência de ${qty} un de ${targetProduct.name} (${from === 'shelf' ? 'Gôndola -> Depósito' : 'Depósito -> Gôndola'}) concluída.`,
+            message: `Transferência de ${qty} un de ${targetProduct.name} (${isToDepot ? 'Gôndola -> Depósito' : 'Depósito -> Gôndola'}) concluída.`,
             product: updatedProd,
           };
           executedResults.push(item.result);
@@ -862,7 +898,11 @@ Você DEVE responder ESTRITAMENTE em formato JSON:
     return {
       transcription,
       intent,
-      extractedData,
+      extractedData: {
+        isBatch,
+        batchConfig,
+        rawParsed: parsed,
+      },
       actions: actionList,
       matchedProducts: Array.from(matchedProductsMap.values()),
       explanation,

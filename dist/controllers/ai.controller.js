@@ -117,10 +117,12 @@ export class AiController {
             return reply.status(200).send(result);
         }
         catch (error) {
+            request.log.error(error, 'Erro no endpoint /ai/voice-command');
             if (error instanceof AppError) {
                 return reply.status(error.statusCode).send({ error: error.message });
             }
-            return reply.status(500).send({ error: 'Erro ao processar comando de voz' });
+            const errMessage = error instanceof Error ? error.message : 'Erro interno ao processar comando de voz';
+            return reply.status(500).send({ error: errMessage });
         }
     }
 }
