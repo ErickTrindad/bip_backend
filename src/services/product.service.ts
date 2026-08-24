@@ -1,8 +1,9 @@
 import axios from 'axios';
-import { Product, Prisma } from '@prisma/client';
+import { Product, Prisma, PaymentMethod } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { AuthUser } from '../middlewares/auth.js';
 import { AppError } from '../errors/app-error.js';
+import { saleService } from './sale.service.js';
 
 export interface CreateProductInput {
   barcode: string;
@@ -520,82 +521,28 @@ export class ProductService {
    * Conforme Fase 5 do GO PME (Bipar múltiplos produtos, somar o carrinho e dar baixa no shelf_qty).
    */
   async processSale(data: PosSaleInput, user: AuthUser) {
-    const tenantId = this.resolveTenantId(user, data.tenantId);
+    const result = await saleService.processSale(
+      {
+        items: data.items,
+        paymentMethod: data.paymentMethod as PaymentMethod | undefined,
+        tenantId: data.tenantId,
+      },
+      user
+    );
 
-    if (!data.items || data.items.length === 0) {
-      throw new AppError('Nenhum item informado para a venda', 400);
-    }
-
-    return prisma.$transaction(async (tx) => {
-      let totalAmount = 0;
-      let totalItems = 0;
-      const updatedProductsList = [];
-
-      for (const item of data.items) {
-        const qty = item.quantity && item.quantity > 0 ? item.quantity : 1;
-
-        let product: Product | null = null;
-        if (item.productId) {
-          product = await tx.product.findFirst({
-            where: {
-              id: item.productId,
-              deletedAt: null,
-            },
-          });
-        } else if (item.barcode) {
-          product = await tx.product.findFirst({
-            where: {
-              tenantId,
-              barcode: item.barcode,
-              deletedAt: null,
-            },
-          });
-        } else {
-          throw new AppError('Cada item de venda deve conter productId ou barcode', 400);
-        }
-
-        if (!product || product.tenantId !== tenantId) {
-          throw new AppError(
-            `Produto ${item.productId || item.barcode} não encontrado no catálogo desta empresa`,
-            404
-          );
-        }
-
-        if (product.shelfQty < qty) {
-          throw new AppError(
-            `Estoque na gôndola insuficiente para "${product.name}". Disponível na gôndola: ${product.shelfQty}, Solicitado: ${qty}`,
-            400
-          );
-        }
-
-        const price = item.unitPrice !== undefined ? item.unitPrice : (product.price ? Number(product.price) : 0);
-        totalAmount += price * qty;
-        totalItems += qty;
-
-        const updated = await tx.product.update({
-          where: { id: product.id },
-          data: {
-            shelfQty: { decrement: qty },
-          },
-        });
-
-        updatedProductsList.push({
-          id: updated.id,
-          name: updated.name,
-          barcode: updated.barcode,
-          soldQty: qty,
-          remainingShelfQty: updated.shelfQty,
-        });
-      }
-
-      return {
-        message: 'Venda finalizada com sucesso e estoque de gôndola atualizado',
-        paymentMethod: data.paymentMethod || 'DINHEIRO',
-        totalItems,
-        totalAmount: Number(totalAmount.toFixed(2)),
-        updatedProducts: updatedProductsList,
-      };
-    });
+    return {
+      message: result.message,
+      paymentMethod: result.paymentMethod,
+      totalItems: result.totalItems,
+      totalAmount: result.totalAmount,
+      updatedProducts: result.updatedProducts.map((p) => ({
+        id: p.id,
+        name: p.name,
+        barcode: p.barcode,
+        soldQty: p.soldQty,
+        remainingShelfQty: p.remainingShelfQty,
+      })),
+    };
   }
 
   /**

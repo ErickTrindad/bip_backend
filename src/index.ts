@@ -30,6 +30,9 @@ import { tenantRoutes } from "./routes/tenant.routes.js";
 import { productRoutes } from "./routes/product.routes.js";
 import { prisma } from "./lib/prisma.js";
 import { aiRoutes } from "./routes/ai.routes.js";
+import { reportRoutes } from "./routes/report.routes.js";
+import { saleRoutes } from "./routes/sale.routes.js";
+import { posSessionRoutes } from "./routes/pos-session.routes.js";
 
 const app = Fastify({
   logger: true,
@@ -115,6 +118,9 @@ await app.register(authRoutes);
 await app.register(tenantRoutes);
 await app.register(productRoutes);
 await app.register(aiRoutes);
+await app.register(reportRoutes);
+await app.register(saleRoutes);
+await app.register(posSessionRoutes);
 const port = Number(process.env.PORT) || 3333;
 
 try {

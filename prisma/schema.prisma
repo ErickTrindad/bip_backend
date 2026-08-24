@@ -12,6 +12,12 @@ enum Role {
   USER
 }
 
+enum TenantPlan {
+  FREE
+  PRO
+  PREMIUM
+}
+
 enum TenantCategory {
   PADARIA
   MERCEARIA
@@ -31,9 +37,19 @@ enum EmployeeRange {
   TEAM_11_PLUS @map("team_11_plus")
 }
 
+enum PaymentMethod {
+  DINHEIRO
+  PIX
+  CARTAO_DEBITO
+  CARTAO_CREDITO
+  OUTROS
+  MULTIPLOS
+}
+
 model Tenant {
   id            String         @id @default(uuid()) @db.Uuid
   name          String
+  plan          TenantPlan     @default(FREE)
   category      TenantCategory @default(OUTROS)
   employeeRange EmployeeRange  @default(SOLO_1) @map("employee_range")
   email         String?
@@ -42,9 +58,11 @@ model Tenant {
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
 
-  owner    User      @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  users    User[]    @relation("TenantUsers")
-  products Product[]
+  owner       User         @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  users       User[]       @relation("TenantUsers")
+  products    Product[]
+  sales       Sale[]
+  posSessions PosSession[]
 
   @@index([ownerId], map: "idx_tenants_owner_id")
   @@map("tenants")
@@ -60,33 +78,89 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  tenant       Tenant?  @relation("TenantUsers", fields: [tenantId], references: [id], onDelete: SetNull)
-  ownedTenants Tenant[] @relation("TenantOwner")
+  tenant       Tenant?      @relation("TenantUsers", fields: [tenantId], references: [id], onDelete: SetNull)
+  ownedTenants Tenant[]     @relation("TenantOwner")
+  sales        Sale[]
+  posSessions  PosSession[]
 
   @@index([tenantId], map: "idx_users_tenant_id")
   @@map("users")
 }
 
 model Product {
-  id            String    @id @default(uuid()) @db.Uuid
-  tenantId      String    @map("tenant_id") @db.Uuid
-  barcode       String    @map("barcode")
+  id            String     @id @default(uuid()) @db.Uuid
+  tenantId      String     @map("tenant_id") @db.Uuid
+  barcode       String     @map("barcode")
   name          String
   category      String?
-  depotQty      Int       @default(0) @map("depot_qty")
-  depotLocation String?   @map("depot_location")
-  shelfQty      Int       @default(0) @map("shelf_qty")
-  shelfLocation String?   @map("shelf_location")
-  shelfMinQty   Int       @default(0) @map("shelf_min_qty")
-  price         Decimal?  @db.Decimal(10, 2)
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
-  deletedAt     DateTime? @map("deleted_at")
+  depotQty      Int        @default(0) @map("depot_qty")
+  depotLocation String?    @map("depot_location")
+  shelfQty      Int        @default(0) @map("shelf_qty")
+  shelfLocation String?    @map("shelf_location")
+  shelfMinQty   Int        @default(0) @map("shelf_min_qty")
+  price         Decimal?   @db.Decimal(10, 2)
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+  deletedAt     DateTime?  @map("deleted_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  saleItems SaleItem[]
 
   @@unique([tenantId, barcode], map: "idx_products_tenant_barcode")
   @@index([tenantId], map: "idx_products_tenant_id")
   @@index([tenantId, updatedAt], map: "idx_products_tenant_updated_at")
   @@map("products")
+}
+
+model Sale {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  userId        String?       @map("user_id") @db.Uuid
+  totalAmount   Decimal       @map("total_amount") @db.Decimal(10, 2)
+  totalItems    Int           @map("total_items")
+  paymentMethod PaymentMethod @default(DINHEIRO) @map("payment_method")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items  SaleItem[]
+
+  @@index([tenantId, createdAt], map: "idx_sales_tenant_created_at")
+  @@map("sales")
+}
+
+model SaleItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  saleId     String   @map("sale_id") @db.Uuid
+  productId  String   @map("product_id") @db.Uuid
+  quantity   Int
+  unitPrice  Decimal  @map("unit_price") @db.Decimal(10, 2)
+  totalPrice Decimal  @map("total_price") @db.Decimal(10, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([productId, createdAt], map: "idx_sale_items_product_created_at")
+  @@index([saleId], map: "idx_sale_items_sale_id")
+  @@map("sale_items")
+}
+
+model PosSession {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  channel   String   @unique
+  status    String   @default("ACTIVE")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status], map: "idx_pos_sessions_tenant_status")
+  @@index([token], map: "idx_pos_sessions_token")
+  @@map("pos_sessions")
 }

@@ -56,6 +56,17 @@ Valores aceitos para o campo `employeeRange` / `tenantEmployeeRange`:
 | `PUT` | `/products/:id` | Autenticado | Atualização de dados e estoques do produto |
 | `DELETE` | `/products/:id` | Autenticado | Exclusão lógica (soft delete) de produto do catálogo |
 | `GET` | `/products/sync/delta` | Autenticado | Delta Sync por Timestamp para IndexedDB / PDV Offline |
+| `POST` | `/sales` | Autenticado | PDV: Registra venda com persistência em `Sale`/`SaleItem` e baixa na gôndola |
+| `GET` | `/sales` | Autenticado | Histórico paginado de vendas com filtros e limite de retenção por plano |
+| `GET` | `/sales/:id` | Autenticado | Detalhes de uma venda específica com itens e dados do operador |
+| `POST` | `/pos/sessions/pair` | Autenticado | Cria sessão efêmera de pareamento (QR Code) para scanner remoto no celular |
+| `GET` | `/pos/sessions/:sessionId/validate` | Pública / Token | Valida sessão escaneada pelo celular antes de ativar a câmera |
+| `POST` | `/pos/sessions/:sessionId/close` | Autenticado | Encerra a sessão de pareamento do scanner remoto |
+| `GET` | `/reports/overview` | Autenticado | Dashboard executivo com métricas globais e alertas de compras |
+| `GET` | `/reports/abc` | Autenticado | Relatório de Curva ABC (Faturamento, Giro e Margem de Lucro) |
+| `GET` | `/reports/turnover-margin-matrix` | Autenticado | Matriz de Rentabilidade x Velocidade de Saída (Giro x Margem) |
+| `GET` | `/reports/replenishment-purchasing` | Autenticado | Planejamento de Compras e Ponto de Pedido (ROP / Reposição) |
+| `GET` | `/reports/space-optimization` | Autenticado | Otimização de Espaço Físico de Exposição (Gôndolas vs Depósito) |
 ---
 
 ## 1. 🏥 Health Check
@@ -717,6 +728,167 @@ Endpoint essencial para a sincronização bidirecional e offline-first do PDV e 
 ```
 
 ---
+---
+
+## 5. 🛒 Histórico de Vendas e PDV (`/sales`)
+
+Módulo de frente de caixa e persistência real de histórico de vendas com isolamento multi-tenant rigoroso e filtros de data baseados no plano do tenant:
+- **Plano FREE**: Últimos 30 dias de histórico
+- **Plano PRO**: Últimos 90 dias de histórico
+- **Plano PREMIUM**: Últimos 365 dias (1 ano) de histórico
+
+---
+
+### `POST /sales` (Registrar Venda PDV)
+Registra uma venda atomicamente com baixa na gôndola (`shelf_qty`) e persistência definitiva nas tabelas `sales` e `sale_items`.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  Content-Type: application/json
+  ```
+- **Body Esperado (JSON)**:
+```json
+{
+  "paymentMethod": "PIX",
+  "items": [
+    {
+      "barcode": "7891000100103",
+      "quantity": 2,
+      "unitPrice": 8.50
+    }
+  ]
+}
+```
+- **Resposta Sucesso (`201 Created`)**:
+```json
+{
+  "message": "Venda processada e registrada com sucesso com baixa automática na gôndola",
+  "paymentMethod": "PIX",
+  "totalItems": 2,
+  "totalAmount": 17.00,
+  "updatedProducts": [
+    {
+      "id": "8f3b145d-7a1b-4f9e-bc43-228741369def",
+      "name": "Leite Condensado Moça 395g",
+      "barcode": "7891000100103",
+      "soldQty": 2,
+      "remainingShelfQty": 10
+    }
+  ]
+}
+```
+
+---
+
+### `GET /sales` (Histórico de Vendas do Tenant)
+Consulta o histórico de vendas paginado do tenant com filtros de data, operador e forma de pagamento.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Query Params (Opcionais)**:
+  - `startDate`: Data inicial (ex: `2026-08-01`) - limitada automaticamente pela janela do plano do tenant
+  - `endDate`: Data final (ex: `2026-08-24`)
+  - `paymentMethod`: `DINHEIRO` | `PIX` | `CARTAO_DEBITO` | `CARTAO_CREDITO` | `OUTROS` | `MULTIPLOS`
+  - `userId`: UUID do operador
+  - `limit`: Quantidade por página (padrão: 50, máx: 200)
+  - `offset`: Deslocamento de paginação (padrão: 0)
+  - `tenantId`: UUID do tenant (Super Admin apenas)
+
+---
+
+### `GET /sales/:id` (Detalhes de uma Venda)
+Busca os dados detalhados de uma venda específica pelo seu UUID.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Parâmetros de URL**:
+  - `id`: UUID da venda
+
+
+---
+
+## 6. 📱 Scanner Remoto / Bipador via Celular (`/pos/sessions`)
+
+Permite que um operador abra o checkout no computador desktop e conecte a câmera do celular como leitor de código de barras em tempo real através de pareamento seguro com QR Code.
+
+---
+
+### `POST /pos/sessions/pair` (Criar Sessão de Pareamento)
+Inicia uma sessão efêmera (30 minutos) e retorna o token de segurança, o canal Realtime para broadcast e a URL pronta para geração do QR Code.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Resposta Sucesso (`201 Created`)**:
+```json
+{
+  "message": "Sessão de pareamento para scanner remoto criada com sucesso",
+  "sessionId": "e812d26f-9988-4fb6-82fe-3323a6f7b112",
+  "token": "4a7b9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
+  "channel": "pos_sess_e812d26f99884fb682fe3323a6f7b112",
+  "status": "ACTIVE",
+  "expiresAt": "2026-08-24T18:30:00.000Z",
+  "expiresInSeconds": 1800,
+  "qrCodeUrl": "/scanner-remote?session=e812d26f-9988-4fb6-82fe-3323a6f7b112&token=4a7b9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b"
+}
+```
+
+---
+
+### `GET /pos/sessions/:sessionId/validate` (Validar Sessão no Mobile)
+Usada pela aplicação mobile/PWA ao abrir o link do QR Code para validar a sessão e recuperar os dados do canal de broadcast antes de iniciar a leitura com a câmera.
+
+- **Parâmetros de URL**:
+  - `sessionId`: UUID da sessão
+- **Query Params**:
+  - `token`: Token secreto da sessão
+- **Resposta Sucesso (`200 OK`)**:
+```json
+{
+  "valid": true,
+  "sessionId": "e812d26f-9988-4fb6-82fe-3323a6f7b112",
+  "channel": "pos_sess_e812d26f99884fb682fe3323a6f7b112",
+  "status": "ACTIVE",
+  "expiresAt": "2026-08-24T18:30:00.000Z",
+  "remainingSeconds": 1785,
+  "tenant": {
+    "id": "c1f7a4b8-2a1d-4f1e-9a1b-123456789abc",
+    "name": "Mercadinho São Paulo",
+    "category": "MERCEARIA"
+  },
+  "operator": {
+    "id": "11111111-2222-3333-4444-555555555555",
+    "name": "Operador Caixa 01",
+    "email": "caixa01@mercadinho.com"
+  }
+}
+```
+
+---
+
+### `POST /pos/sessions/:sessionId/close` (Encerrar Sessão de Pareamento)
+Fecha a sessão quando o PDV for finalizado no desktop.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Parâmetros de URL**:
+  - `sessionId`: UUID da sessão
+- **Resposta Sucesso (`200 OK`)**:
+```json
+{
+  "message": "Sessão de pareamento encerrada com sucesso",
+  "sessionId": "e812d26f-9988-4fb6-82fe-3323a6f7b112",
+  "status": "CLOSED"
+}
+```
 
 ## 5. 🤖 Inteligência Artificial no Chão de Loja (`/ai`)
 ---
@@ -825,4 +997,163 @@ Pipeline integrado: **Whisper Large v3** transcreve a voz do repositor -> **Llam
     "message": "Transferência de 5 un de Leite Condensado Moça Lata 395g realizada com sucesso."
   }
 }
+
+---
+
+## 6. 📊 Relatórios e Inteligência Estratégica (`/reports`)
+
+Módulo analítico completo projetado para gestão inteligente de pequenos e médios varejos (GO PME), oferecendo Curva ABC, Matrizes de Decisão 2x2, Análise de Giro vs Margem, Otimização de Espaço de Exposição em Gôndolas e Planejamento de Reposição/Compras.
+
+---
+
+### `GET /reports/overview` (Dashboard Executivo e Métricas Globais)
+Retorna um sumário executivo com valor total do catálogo a preço de venda e custo, margem média consolidada, saúde do giro e alertas rápidos de compras.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Query Params (Opcionais)**:
+  - `tenantId`: UUID do tenant (Super Admin apenas)
+- **Resposta Sucesso (`200 OK`)**:
+```json
+{
+  "tenant": {
+    "id": "c1f7a4b8-2a1d-4f1e-9a1b-123456789abc",
+    "name": "Mercadinho São Paulo",
+    "category": "MERCEARIA"
+  },
+  "inventoryOverview": {
+    "totalSKUs": 45,
+    "totalPhysicalUnits": 1280,
+    "totalDepotUnits": 850,
+    "totalShelfUnits": 430,
+    "totalCatalogValue": 14500.50,
+    "potentialGrossProfit": 5075.18,
+    "averageMarginPercentage": 35.0
+  },
+  "turnoverAndABC": {
+    "classACount": 9,
+    "classBCount": 15,
+    "classCCount": 21,
+    "highTurnoverSkusCount": 18,
+    "criticalStockoutCount": 4
+  },
+  "purchasingAlerts": {
+    "reorderUrgentCount": 5,
+    "estimatedCapitalRequired": 1240.80
+  },
+  "quickRecommendations": [
+    "Identificados 5 produtos com risco de ruptura. Necessário investimento estimado de R$ 1.240,80 em reposição.",
+    "Os 9 produtos da Curva A concentram R$ 11.600,40 do faturamento mensal estimado."
+  ]
+}
+```
+
+---
+
+### `GET /reports/abc` (Relatório da Curva ABC - Giro, Faturamento e Margem)
+Classifica o catálogo conforme o Princípio de Pareto (Classes A: ~80% do faturamento, B: ~15%, C: ~5%), permitindo ordenação por faturamento, margem, giro ou volume de vendas.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Query Params (Opcionais)**:
+  - `sortBy`: `revenue` (padrão) | `margin` | `turnover` | `salesVolume`
+  - `category`: Filtrar por categoria
+  - `limit`: Quantidade máxima de itens (padrão: 100)
+  - `tenantId`: UUID do tenant (Super Admin apenas)
+- **Resposta Sucesso (`200 OK`)**:
+```json
+{
+  "summary": {
+    "totalProducts": 3,
+    "totalStockValue": 2540.00,
+    "totalMonthlyRevenue": 7850.00,
+    "totalMonthlyProfit": 2747.50,
+    "averageMarginPercentage": 35.0,
+    "classACount": 1,
+    "classBCount": 1,
+    "classCCount": 1,
+    "classARevenue": 6280.00,
+    "classBRevenue": 1177.50,
+    "classCRevenue": 392.50
+  },
+  "items": [
+    {
+      "id": "8f3b145d-7a1b-4f9e-bc43-228741369def",
+      "barcode": "7891000100103",
+      "name": "Leite Condensado Moça Lata 395g",
+      "category": "Laticínios",
+      "price": 8.50,
+      "estimatedCost": 5.53,
+      "marginUnit": 2.97,
+      "marginPercentage": 35.0,
+      "depotQty": 20,
+      "shelfQty": 12,
+      "totalStockQty": 32,
+      "estimatedDailySales": 3.5,
+      "estimatedMonthlySales": 105,
+      "estimatedMonthlyRevenue": 892.50,
+      "estimatedMonthlyProfit": 311.85,
+      "turnoverRatio": 3.28,
+      "stockDaysRemaining": 9,
+      "revenueSharePercentage": 65.4,
+      "accumulatedSharePercentage": 65.4,
+      "abcClass": "A",
+      "turnoverClass": "ALTO",
+      "marginClass": "MEDIA"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /reports/turnover-margin-matrix` (Matriz Rentabilidade x Giro)
+Segmenta produtos em 4 quadrantes para decisões de sortimento e precificação:
+1. **ESTRELA**: Alto Giro + Alta Margem (Golden Zone / Ponta de Gôndola)
+2. **ALTO_GIRO**: Alto Giro + Baixa Margem (Gerador de Tráfego / Fundo de Loja)
+3. **GERADOR_MARGEM**: Baixo Giro + Alta Margem (Oportunidade / Cross-Merchandising)
+4. **LENTO_ABAIXO_MARGEM**: Baixo Giro + Baixa Margem (Candidato a Queima / Descontinuação)
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Query Params (Opcionais)**:
+  - `classification`: `ESTRELA` | `ALTO_GIRO` | `GERADOR_MARGEM` | `LENTO_ABAIXO_MARGEM`
+  - `category`: Filtrar por categoria
+  - `tenantId`: UUID do tenant (Super Admin apenas)
+
+---
+
+### `GET /reports/replenishment-purchasing` (Planejamento de Compras e Ponto de Pedido - ROP)
+Calcula o Ponto de Pedido ($ROP = (Demanda \times LeadTime) + EstoqueSegurança$) e sugere o volume exato de compra e investimento financeiro necessário para evitar ruptura.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Query Params (Opcionais)**:
+  - `leadTimeDays`: Prazo de entrega do fornecedor em dias (Padrão: 7)
+  - `safetyStockDays`: Dias de cobertura do estoque de segurança (Padrão: 3)
+  - `status`: `CRITICO_RUPTURA` | `COMPRA_URGENTE` | `ATENCAO` | `ESTAVEL` | `EXCESSO`
+  - `category`: Filtrar por categoria
+  - `tenantId`: UUID do tenant (Super Admin apenas)
+
+---
+
+### `GET /reports/space-optimization` (Otimização de Espaço Físico de Exposição)
+Cruza a eficiência de receita gerada versus a área/frentes ocupadas na gôndola, sugerindo expansão, manutenção, redução ou substituição de mix.
+
+- **Headers**:
+  ```http
+  Authorization: Bearer <SEU_ACCESS_TOKEN>
+  ```
+- **Query Params (Opcionais)**:
+  - `action`: `EXPANDIR_GONDOLA` | `MANTER` | `REDUZIR_GONDOLA` | `REAVALIAR_MIX`
+  - `category`: Filtrar por categoria
+  - `tenantId`: UUID do tenant (Super Admin apenas)
 ```
