@@ -19,19 +19,24 @@ export const groqPromptBodySchema = z.object({
   jsonMode: z.boolean().optional().default(false).describe('Forçar saída em formato JSON'),
 });
 
-export const groqVoiceCommandBodySchema = z.object({
-  audioBase64: z.string().min(1, 'Áudio em base64 é obrigatório'),
-  filename: z.string().default('audio.m4a'),
-  systemPrompt: z
-    .string()
-    .optional()
-    .describe('Instrução opcional para guiar a interpretação da intenção'),
-  autoExecute: z
-    .boolean()
-    .optional()
-    .default(false)
-    .describe('Executar as ações no banco automaticamente se identificadas (suporta múltiplos produtos e ações compostas)'),
-});
+export const groqVoiceCommandBodySchema = z
+  .object({
+    audioBase64: z.string().optional().describe('Áudio em base64'),
+    prompt: z.string().optional().describe('Comando de texto digitado diretamente (caso não use mic/áudio)'),
+    filename: z.string().default('audio.m4a'),
+    systemPrompt: z
+      .string()
+      .optional()
+      .describe('Instrução opcional para guiar a interpretação da intenção'),
+    autoExecute: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('Executar as ações no banco automaticamente se identificadas (suporta múltiplos produtos e ações compostas)'),
+  })
+  .refine((data) => (data.audioBase64 && data.audioBase64.trim().length > 0) || (data.prompt && data.prompt.trim().length > 0), {
+    message: 'É necessário fornecer um áudio (audioBase64) ou um texto (prompt).',
+  });
 
 export const groqTranscribeResponseSchema = z.object({
   text: z.string(),

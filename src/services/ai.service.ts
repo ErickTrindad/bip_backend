@@ -492,19 +492,24 @@ export class GroqService {
   }
 
   /**
-   * Processa comando de voz de chão de loja com suporte completo a múltiplos produtos e multi-ações.
+   * Processa comando de voz ou texto de chão de loja com suporte completo a múltiplos produtos e multi-ações.
    */
   async processVoiceCommand(
-    audioBuffer: Buffer,
+    audioBuffer: Buffer | null,
     filename: string,
     user: AuthUser,
-    options?: { systemPrompt?: string; autoExecute?: boolean }
+    options?: { systemPrompt?: string; autoExecute?: boolean; prompt?: string }
   ) {
-    // 1. Transcrição Whisper
-    const { text: transcription } = await this.transcribeAudio({
-      audioBuffer,
-      filename,
-    });
+    let transcription = options?.prompt?.trim() || '';
+
+    // 1. Transcrição Whisper se áudio fornecido e nenhum prompt de texto direto
+    if (!transcription && audioBuffer && audioBuffer.length > 0) {
+      const transcribeResult = await this.transcribeAudio({
+        audioBuffer,
+        filename,
+      });
+      transcription = transcribeResult.text || '';
+    }
 
     if (!transcription.trim()) {
       return {
@@ -513,11 +518,10 @@ export class GroqService {
         extractedData: {},
         actions: [],
         matchedProducts: [],
-        explanation: 'Nenhuma fala ou áudio inteligível foi detectado.',
+        explanation: 'Nenhum comando em áudio ou texto foi detectado.',
         executed: false,
       };
     }
-    // 2. Extração semântica com Arquitetura Universal (Escopo, Direção e Regra de Quantidade)
     const systemPrompt =
       options?.systemPrompt ||
       `Você é o assistente de inteligência artificial de estoque do GO PME.

@@ -126,12 +126,15 @@ export class AiController {
     }
 
     try {
-      const audioBuffer = Buffer.from(parseBody.data.audioBase64, 'base64');
+      const audioBuffer = parseBody.data.audioBase64
+        ? Buffer.from(parseBody.data.audioBase64, 'base64')
+        : null;
       const result = await groqService.processVoiceCommand(
         audioBuffer,
         parseBody.data.filename,
         user,
         {
+          prompt: parseBody.data.prompt,
           systemPrompt: parseBody.data.systemPrompt,
           autoExecute: parseBody.data.autoExecute,
         }
